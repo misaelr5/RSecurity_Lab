@@ -2,14 +2,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 
 export const schemaVersion = 1
-type Table = 'organizations' | 'contacts' | 'engagements' | 'public_sources' | 'observations' | 'outreach_drafts' | 'authorizations' | 'scope_assets' | 'audit_runs' | 'findings' | 'evidence_refs' | 'activity_log'
+type Table = 'organizations' | 'contacts' | 'engagements' | 'public_sources' | 'observations' | 'outreach_drafts' | 'authorizations' | 'scope_assets' | 'audit_runs' | 'findings' | 'evidence_refs' | 'activity_log' | 'report_reviews'
 type Row<T> = T & { id: string; parent: string | null; createdAt: string; updatedAt: string }
 
 const relations: Record<Table, Table | null> = {
   organizations: null, contacts: 'organizations', engagements: 'organizations',
   public_sources: 'organizations', observations: 'public_sources', outreach_drafts: 'organizations',
   authorizations: 'engagements', scope_assets: 'authorizations', audit_runs: null,
-  findings: 'audit_runs', evidence_refs: 'audit_runs', activity_log: null,
+  findings: 'audit_runs', evidence_refs: 'audit_runs', activity_log: null, report_reviews: null,
 }
 
 export function openStore(path: string) {

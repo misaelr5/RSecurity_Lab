@@ -1,7 +1,7 @@
 import { parse } from 'csv-parse/sync'
-import { prospect, source, modes } from './schemas.ts'
+import { prospect, source } from './schemas.ts'
 import type { Prospect, Source, Authorization } from './schemas.ts'
-import type { z } from './schemas.ts'
+import type { modes } from './schemas.ts'
 export * from './schemas.ts'
 
 export const crmHeaders = [
@@ -57,7 +57,7 @@ export const csvSource: PublicSourceProvider = { name: 'REAC_LEADS_CSV_V1', capt
 
 export const policyVersion = '1'
 export const fixturePath = '/fixture'
-export type Mode = z.output<ReturnType<typeof import('./schemas.ts').z.enum<typeof modes>>>
+export type Mode = (typeof modes)[number]
 export type ScopeRequest = { mode: Mode; hostname?: string; port?: number; path?: string; method?: string }
 export type AuthorizationRecord = Authorization & { state: 'PENDING' | 'APPROVED' | 'REVOKED'; reviewer?: string; reviewedAt?: string }
 const denied = (reason: string) => ({ allowed: false as const, reason, policyVersion })
