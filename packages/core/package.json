@@ -1,0 +1,1 @@
+{"name":"@reac/core","type":"module","private":true,"exports":"./src/index.ts","dependencies":{"zod":"4.6.7","csv-parse":"7.0.3"}}

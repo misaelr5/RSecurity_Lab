@@ -1,0 +1,1 @@
+{"name":"@reac/reporting","type":"module","private":true,"exports":"./src/index.ts","dependencies":{"@reac/core":"*"}}
