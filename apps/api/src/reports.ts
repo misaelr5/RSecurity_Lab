@@ -1,19 +1,21 @@
 import { createHash } from 'node:crypto'
-import { id, redact, review, z } from '@reac/core'
+import { id, redact, versionedReview, z } from '@reac/core'
 import { renderReport } from '@reac/reporting'
 import type { Report } from '@reac/reporting'
 import type { FastifyInstance } from 'fastify'
 import type { Store } from './store.ts'
 import type { registerPortfolio } from './portfolio.ts'
+import type { Finding } from './defensive-reviews.ts'
+import type { registerPublicAssets } from './public-assets.ts'
 import type { registerAudits } from './audits.ts'
-import { attach, parse } from './http.ts'
+import { attach, parse, problem } from './http.ts'
 
 const route = z.strictObject({ kind: z.enum(['prospect', 'lab']), id })
 const formats = {
   md: 'text/markdown; charset=utf-8', html: 'text/html; charset=utf-8', csv: 'text/csv; charset=utf-8',
 }
 
-export function registerReports(app: FastifyInstance, store: Store, portfolio: ReturnType<typeof registerPortfolio>, audits: ReturnType<typeof registerAudits>) {
+export function registerReports(app: FastifyInstance, store: Store, portfolio: ReturnType<typeof registerPortfolio>, audits: ReturnType<typeof registerAudits>, assets: ReturnType<typeof registerPublicAssets>) {
   function build(kind: 'prospect' | 'lab', idValue: string): Report {
     if (kind === 'prospect') {
       const item = portfolio.get(idValue)
@@ -21,13 +23,38 @@ export function registerReports(app: FastifyInstance, store: Store, portfolio: R
         title: 'Relevamiento público preliminar · ' + item.name,
         sections: [
           { title: 'Resumen ejecutivo', lines: [item.industry, item.city + ' · ' + item.region, 'Revisión comercial de fuentes aportadas manualmente. Las hipótesis requieren validación dentro de un alcance acordado.'] },
-          { title: 'Fuentes y metodología', lines: portfolio.sourcesFor(item.id).map((item) => item.consultedAt + ' · ' + item.provider + ' · ' + item.url.replace(/[?#].*$/, '') + ' · ' + item.statement) },
+          { title: 'Fuentes y metodología', lines: portfolio.sourcesFor(item.id).map((item) => item.id + ' · ' + item.consultedAt + ' · ' + item.provider + ' · ' + item.url.replace(/[?#].*$/, '') + ' · ' + item.statement) },
+          { title: 'Activos de fuentes públicas', lines: assets.list(item.id).map((entry) => [entry.kind, entry.value, entry.status, entry.collectedAt, entry.confidence, entry.note, 'Fuente ' + entry.sourceId].join(' · ')) },
           { title: 'Observaciones y revisión', lines: portfolio.notesFor(item.id).map((item) => [item.level, item.title, item.category, item.statement, item.severity, item.confidence, item.impact, item.limitations, item.recommendation, 'Fuente ' + item.sourceId, item.reviewedAt ? 'Revisada ' + item.reviewedAt : 'Pendiente de revisión'].join(' · ')) },
           { title: 'Límites y próximos pasos', lines: ['Alcance limitado a evidencia pública registrada. Una evaluación técnica requiere autorización y alcance acordado.'] },
         ],
       }
     }
     const item = audits.getRun(idValue)
+    if (item.status === 'BLOCKED') return {
+      title: 'Operación técnica bloqueada',
+      sections: [
+        { title: 'Decisión', lines: [item.mode, item.reason, 'Política de alcance v' + item.policyVersion] },
+        { title: 'Trazabilidad', lines: [item.createdAt, 'La operación se detuvo antes del transporte HTTP.'] },
+      ],
+    }
+    if (item.mode === 'REVISION_DOCUMENTAL') {
+      const findings = store.list<Finding>('findings', item.id)
+      return {
+        title: 'Revisión defensiva · ' + item.project,
+        sections: [
+          { title: 'Resumen ejecutivo', lines: [item.reason, findings.length === 1 ? '1 resultado registrado.' : findings.length + ' resultados registrados.'] },
+          { title: 'Origen y alcance', lines: [item.tool, 'Fecha de la revisión de origen: ' + item.collectedAt, 'Proyecto propio o autorizado según el operador.'] },
+          { title: 'Resultados y estado de revisión', lines: findings.map((entry) => [
+            entry.checkId, entry.component, entry.reference || 'Sin referencia publicada', entry.state,
+            'Severidad sugerida: ' + (entry.severity ?? 'Sin asignar'),
+          ].join(' · ')) },
+          { title: 'Historial', lines: findings.flatMap((entry) => entry.reviews.map((decision) =>
+            [entry.checkId, decision.reviewedAt, decision.reviewer, decision.state, decision.proofReference].join(' · '))) },
+          { title: 'Límites', lines: ['El sistema procesó un resumen. La aplicabilidad de referencias y la evidencia se verifican durante la revisión humana.'] },
+        ],
+      }
+    }
     const evidence = store.list<{ statusCode: number; sha256: string; capturedAt: string }>('evidence_refs', item.id)
     const findings = store.list<{ title: string; present: boolean }>('findings', item.id)
     return {
@@ -47,18 +74,21 @@ export function registerReports(app: FastifyInstance, store: Store, portfolio: R
       title: redact(raw.title),
       sections: raw.sections.map((section) => ({ title: section.title, lines: section.lines.length ? section.lines.map(redact) : ['Sin registros.'] })),
     }
-    return { report, key: [kind, idValue, createHash('sha256').update(JSON.stringify(report)).digest('hex')].join(':') }
+    const contentVersion = createHash('sha256').update(JSON.stringify(report)).digest('hex')
+    return { report, contentVersion, key: [kind, idValue, contentVersion].join(':') }
   }
   app.get('/api/reports/:kind/:id', (request) => {
     const { kind, id } = parse(route, request.params)
-    const { report, key } = content(kind, id)
+    const { report, key, contentVersion } = content(kind, id)
     const approval = store.find<{ reviewer: string; reviewedAt: string }>('report_reviews', key, 'unique_key')
-    return { ...report, reviewer: approval?.reviewer, reviewedAt: approval?.reviewedAt }
+    return { ...report, contentVersion, reviewer: approval?.reviewer, reviewedAt: approval?.reviewedAt }
   })
   app.post('/api/reports/:kind/:id/review', (request) => store.transaction(() => {
     const { kind, id } = parse(route, request.params)
-    const { reviewer } = parse(review, request.body)
-    const { key } = content(kind, id)
+    const { reviewer, contentVersion } = parse(versionedReview, request.body)
+    const current = content(kind, id)
+    if (current.contentVersion !== contentVersion) throw problem(409, 'El informe cambió. Volvé a abrirlo para revisar la versión actual.')
+    const { key } = current
     const existing = store.find('report_reviews', key, 'unique_key')
     if (existing) return existing
     store.log('Informe revisado', id)
@@ -72,4 +102,3 @@ export function registerReports(app: FastifyInstance, store: Store, portfolio: R
       renderReport({ ...report, reviewer: approval?.reviewer, reviewedAt: approval?.reviewedAt }, format))
   })
 }
-

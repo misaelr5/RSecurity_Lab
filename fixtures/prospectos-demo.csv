@@ -1,0 +1,4 @@
+empresa,rubro,ciudad,web,instagram,email,telefono,fuente_url,fecha_verificacion,presencia_web,oportunidad,servicio,prioridad,estado,mensaje,proximo_seguimiento,notas,consentimiento
+Taller Cauce (ficticio),Arquitectura,Villa Dolores,https://cauce.example/,,,,"https://cauce.example/catalogo",2026-11-22,Con web,,A definir,Media,Verificar,,,Dato sintético,Sin registro
+Refugio Arrayán (ficticio),Turismo,Mina Clavero,https://arrayan.example/,,,,https://arrayan.example/servicios,2026-11-22,Con web,,A definir,Media,Nuevo,,,Dato sintético,Sin registro
+Estudio Lucerna (ficticio),Consultora,Córdoba Capital,https://lucerna.example/,,,,https://lucerna.example/,2026-11-22,Con web,,A definir,Baja,No contactar,,,Dato sintético,Excluido

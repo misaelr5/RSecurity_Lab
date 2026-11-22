@@ -1,1 +1,1 @@
-{"name":"@reac/api","type":"module","private":true,"dependencies":{"fastify":"5.12.8","@fastify/static":"8.3.0","@reac/core":"*","@reac/reporting":"*"}}
+{"name":"@reac/api","type":"module","private":true,"dependencies":{"fastify":"5.12.8","@reac/core":"*","@reac/reporting":"*"}}

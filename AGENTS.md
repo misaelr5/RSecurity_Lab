@@ -14,3 +14,4 @@ Aplican al agente Codex y a subagentes dentro de este proyecto.
 10. Sin deploy, envío de emails, cambios en sistemas ajenos, pagos ni acciones irreversibles sin autorización explícita del humano.
 11. Registrar en `docs/ESTADO.md` cada avance, sus pruebas reales, errores y próximos pasos.
 12. Si una tarea tiene riesgo o ambigüedad de autorización, elegir una alternativa local/sintética y continuar con el resto del producto.
+13. Trabajar un ciclo a la vez según `docs/CICLOS_IMPLEMENTACION.md`. Antes de cerrar, revisar el diff contra los criterios de aceptación y registrar las pruebas realmente ejecutadas.

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "project": "Proyecto ficticio",
+  "tool": "Revisión manual",
+  "toolVersion": "1",
+  "collectedAt": "2026-11-22",
+  "ownedOrAuthorized": true,
+  "results": [{
+    "checkId": "CONTROL-DOCUMENTAL-DEMO",
+    "component": "entorno sintético",
+    "severity": "Informativa",
+    "reference": ""
+  }]
+}

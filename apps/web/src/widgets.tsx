@@ -3,17 +3,16 @@ import type { FormEvent, ReactNode } from 'react'
 import { api } from './client.ts'
 
 export function useResource<T>(path: string, revision: number) {
-  const [result, setResult] = useState<{ key: string; value?: T; error?: string }>()
-  const key = path + ':' + revision
+  const [result, setResult] = useState<{ path: string; value?: T; error?: string }>()
   useEffect(() => {
     let alive = true
     api<T>(path).then(
-      (value) => { if (alive) setResult({ key, value }) },
-      (error: Error) => { if (alive) setResult({ key, error: error.message }) },
+      (value) => { if (alive) setResult({ path, value }) },
+      (error: Error) => { if (alive) setResult({ path, error: error.message }) },
     )
     return () => { alive = false }
-  }, [key, path])
-  return result?.key === key ? result : { key }
+  }, [revision, path])
+  return result?.path === path ? result : { path }
 }
 export function Resource<T>({ result, children }: { result: { value?: T; error?: string }; children: (value: T) => ReactNode }) {
   if (result.error) return <p className="error" role="alert">{result.error}</p>

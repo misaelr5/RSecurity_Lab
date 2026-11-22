@@ -1,23 +1,31 @@
-import Fastify from 'fastify'
-import fastifyStatic from '@fastify/static'
-import { backup } from 'node:sqlite'
+import Fastify, { LogController } from 'fastify'
+import { readFileSync, readdirSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
-import { mkdir, readdir } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
+import { readdir, lstat } from 'node:fs/promises'
 import { z } from '@reac/core'
 import { openStore, schemaVersion } from './store.ts'
+import { registerDefensiveReviews } from './defensive-reviews.ts'
+import { registerPipeline } from './pipeline.ts'
+import { registerPublicAssets } from './public-assets.ts'
 import { registerPortfolio } from './portfolio.ts'
 import { registerAudits } from './audits.ts'
 import { registerReports } from './reports.ts'
 import { parse } from './http.ts'
+import { registerOperator } from './operator.ts'
+import type { Operator } from './operator.ts'
+import type { Prospect } from '@reac/core'
+import { backupName, createBackup } from './backups.ts'
 
-type Options = { database: string; fixturePort: number; port: number; bundle?: string; backupDir?: string; logger?: boolean }
+type Options = { database: string; fixturePort: number; port: number; bundle?: string; backupDir?: string; logger?: boolean; operator?: Operator }
 const tools = ['Subfinder', 'WappalyzerGo', 'MDN HTTP Observatory', 'HTTPx', 'Nuclei', 'OWASP ZAP', 'OSV-Scanner', 'Semgrep', 'Gitleaks', 'Juice Shop', 'Trivy']
-export const backupName = /^reac-backup-[a-f0-9-]{36}\.sqlite$/
 
 export function createApp(options: Options) {
   const store = openStore(options.database)
-  const app = Fastify({ logger: options.logger ?? false, disableRequestLogging: true, bodyLimit: 1024 * 1024, requestTimeout: 5000, connectionTimeout: 10000 })
+  const app = Fastify({
+    logger: options.logger ?? false, logController: new LogController({ disableRequestLogging: true }),
+    bodyLimit: 1024 * 1024, requestTimeout: 5000, connectionTimeout: 10000,
+    rewriteUrl: (request) => (request.url ?? '/').replace(/^\/api\/v1(?=\/)/, '/api'),
+  })
   const localHost = '127.0.0.1:' + options.port
   const origin = 'http://' + localHost
   app.addHook('onClose', async () => { store.db.close() })
@@ -44,9 +52,13 @@ export function createApp(options: Options) {
   })
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ message: 'Ruta inexistente.' }))
 
+  registerOperator(app, options.port, options.operator)
   const portfolio = registerPortfolio(app, store)
   const audits = registerAudits(app, store, options.fixturePort)
-  registerReports(app, store, portfolio, audits)
+  const assets = registerPublicAssets(app, store)
+  registerPipeline(app, store)
+  registerDefensiveReviews(app, store)
+  registerReports(app, store, portfolio, audits, assets)
   app.get('/api/health', () => {
     store.db.prepare('SELECT 1').get()
     return { status: 'PASS', storage: 'SQLite', schema: schemaVersion }
@@ -63,18 +75,37 @@ export function createApp(options: Options) {
     }) : []
     return files.filter((file) => backupName.test(file)).sort()
   })
+  app.get('/api/retention', async () => {
+    const day = new Date().toISOString().slice(0, 10)
+    const age = (value: string) => (Date.parse(day) - Date.parse(value)) / 86400000
+    const records = store.list<Prospect>('organizations')
+    const files = options.backupDir ? await readdir(options.backupDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    }) : []
+    const dates = options.backupDir ? await Promise.all(files.filter((entry) => entry.isFile() && backupName.test(entry.name))
+      .map(async (entry) => (await lstat(resolve(options.backupDir!, entry.name))).mtime.toISOString().slice(0, 10))) : []
+    return { prospectiveReviewDays: 180, backupReviewDays: 90, unverified: records.filter((entry) => !entry.verifiedAt).length,
+      prospectReviewDue: records.filter((entry) => entry.verifiedAt && age(entry.verifiedAt) >= 180).length,
+      backupReviewDue: dates.filter((date) => age(date) >= 90).length }
+  })
   app.post('/api/backups', async (request, reply) => {
     parse(z.strictObject({}), request.body)
     if (!options.backupDir) return reply.code(503).send({ message: 'Respaldo no configurado.' })
-    await mkdir(options.backupDir, { recursive: true })
-    const filename = 'reac-backup-' + randomUUID() + '.sqlite'
-    await backup(store.db, resolve(options.backupDir, filename))
+    const filename = await createBackup(store.db, options.backupDir)
     store.log('Respaldo local creado')
     return reply.code(201).send({ filename })
   })
   if (options.bundle) {
-    void app.register(fastifyStatic, { root: options.bundle, wildcard: false, cacheControl: false })
+    const root = options.bundle
+    const index = readFileSync(resolve(root, 'index.html'))
+    app.get('/', (_request, reply) => reply.type('text/html; charset=utf-8').send(index))
+    for (const entry of readdirSync(resolve(root, 'assets'), { withFileTypes: true })) {
+      if (!entry.isFile() || !/^[\w-]+\.(?:js|css)$/.test(entry.name)) continue
+      const file = readFileSync(resolve(root, 'assets', entry.name))
+      const type = entry.name.endsWith('.js') ? 'text/javascript' : 'text/css'
+      app.get('/assets/' + entry.name, (_request, reply) => reply.type(type).send(file))
+    }
   }
   return app
 }
-

@@ -3,7 +3,7 @@ import type { CrmRow } from '@reac/core'
 
 export function csvCell(value: unknown) {
   let text = String(value ?? '')
-  if (/^[\t\r\n]|^[\s\uFEFF]*[=+\-@＝＋－＠]/u.test(text)) text = "'" + text
+  if (/^[\t\r\n]|^[\s\uFEFF]*[=+\-@＝＋－＠]|^'+[=+\-@\t\r]/u.test(text)) text = "'" + text
   return '"' + text.replaceAll('"', '""') + '"'
 }
 
@@ -36,4 +36,3 @@ export function renderReport(report: Report, format: Format) {
     html(report.title) + '</title><style>body{font:16px/1.5 system-ui;margin:40px auto;padding:0 24px;max-width:760px;color:#172330} h2{border-bottom:1px solid #ccc}li{margin:.4em 0;overflow-wrap:anywhere}@media print{body{margin:0}h2{break-after:avoid}}</style><main><h1>' +
     html(report.title) + '</h1>' + content + '</main></html>'
 }
-

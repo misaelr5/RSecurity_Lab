@@ -1,8 +1,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
+import { mkdirSync, renameSync, rmSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 
-export const schemaVersion = 1
-type Table = 'organizations' | 'contacts' | 'engagements' | 'public_sources' | 'observations' | 'outreach_drafts' | 'authorizations' | 'scope_assets' | 'audit_runs' | 'findings' | 'evidence_refs' | 'activity_log' | 'report_reviews'
+export const schemaVersion = 2
+type Table = 'organizations' | 'contacts' | 'engagements' | 'public_sources' | 'observations' | 'outreach_drafts' | 'authorizations' | 'scope_assets' | 'audit_runs' | 'findings' | 'evidence_refs' | 'activity_log' | 'report_reviews' | 'public_assets' | 'pipeline_events'
 type Row<T> = T & { id: string; parent: string | null; createdAt: string; updatedAt: string }
 
 const relations: Record<Table, Table | null> = {
@@ -10,24 +12,45 @@ const relations: Record<Table, Table | null> = {
   public_sources: 'organizations', observations: 'public_sources', outreach_drafts: 'organizations',
   authorizations: 'engagements', scope_assets: 'authorizations', audit_runs: null,
   findings: 'audit_runs', evidence_refs: 'audit_runs', activity_log: null, report_reviews: null,
+  public_assets: 'public_sources', pipeline_events: 'engagements',
 }
+
+const versionTwo: Table[] = ['public_assets', 'pipeline_events']
+const tables = Object.keys(relations) as Table[]
+export const tablesForVersion = (version: number) => version === 1 ? tables.filter((table) => !versionTwo.includes(table)) : tables
 
 export function openStore(path: string) {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA busy_timeout=2000; PRAGMA foreign_keys=ON;')
   try {
     const version = db.prepare('PRAGMA user_version').get()?.user_version
-    if (version !== 0 && version !== schemaVersion) throw new Error('Versión de SQLite incompatible.')
-    if (version === 0) {
+    if (version !== 0 && version !== 1 && version !== schemaVersion) throw new Error('Versión de SQLite incompatible.')
+    if (version === 1 && path !== ':memory:') {
+      const dir = resolve(dirname(path), 'backups', basename(path).toLowerCase())
+      mkdirSync(dir, { recursive: true })
+      const output = resolve(dir, 'reac-backup-' + randomUUID() + '.sqlite')
+      const partial = output + '.partial'
+      try {
+        db.prepare('VACUUM INTO ?').run(partial)
+        renameSync(partial, output)
+      } catch (error) {
+        rmSync(partial, { force: true })
+        throw error
+      }
+    }
+    if (version < schemaVersion) {
       db.exec('BEGIN IMMEDIATE')
       try {
-        for (const [table, parent] of Object.entries(relations)) {
+        const lockedVersion = db.prepare('PRAGMA user_version').get()?.user_version
+        const pending = lockedVersion === 0 ? tables : lockedVersion === 1 ? versionTwo : []
+        for (const table of pending) {
+          const parent = relations[table]
           db.exec('CREATE TABLE ' + table + ' (id TEXT PRIMARY KEY NOT NULL, parent TEXT ' +
             (parent ? 'NOT NULL REFERENCES ' + parent + '(id) ON DELETE CASCADE' : 'CHECK(parent IS NULL)') +
             ', unique_key TEXT UNIQUE, data TEXT NOT NULL CHECK(json_valid(data)), created TEXT NOT NULL, updated TEXT NOT NULL) STRICT;')
           if (parent) db.exec('CREATE INDEX ' + table + '_parent ON ' + table + '(parent);')
         }
-        db.exec('PRAGMA user_version = 1; COMMIT;')
+        db.exec('PRAGMA user_version = 2; COMMIT;')
       } catch (error) {
         db.exec('ROLLBACK')
         throw error
@@ -87,4 +110,3 @@ export function openStore(path: string) {
   return { db, list, count, find, insert, update, remove, transaction, log }
 }
 export type Store = ReturnType<typeof openStore>
-

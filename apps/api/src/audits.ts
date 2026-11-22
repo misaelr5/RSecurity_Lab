@@ -1,9 +1,11 @@
 import { request as httpRequest } from 'node:http'
 import { createHash } from 'node:crypto'
-import { authorization, review, id, text, z, modes, fixturePath, scopePolicy, policyVersion } from '@reac/core'
-import type { AuthorizationRecord } from '@reac/core'
+import { authorization, versionedReview, sha256, id, text, z, modes, fixturePath, scopePolicy, policyVersion } from '@reac/core'
+import type { Authorization, AuthorizationRecord } from '@reac/core'
 import type { FastifyInstance } from 'fastify'
 import type { Store } from './store.ts'
+import { findingVersion } from './defensive-reviews.ts'
+import type { Finding } from './defensive-reviews.ts'
 import { parse, must, problem } from './http.ts'
 
 const requestSchema = z.strictObject({
@@ -13,7 +15,8 @@ const requestSchema = z.strictObject({
 })
 type Status = 'RUNNING' | 'STOPPED' | 'FAILED' | 'COMPLETED' | 'BLOCKED'
 export type Run = {
-  mode: (typeof modes)[number]; status: Status; authorizationId?: string;
+  mode: (typeof modes)[number] | 'REVISION_DOCUMENTAL'; status: Status; authorizationId?: string;
+  project?: string; collectedAt?: string;
   reason: string; policyVersion: string; tool: string; startedAt?: string; finishedAt?: string;
 }
 type Evidence = { statusCode: number; headers: { name: string; present: boolean }[]; sha256: string; capturedAt: string }
@@ -37,6 +40,19 @@ function readFixture(port: number, signal: AbortSignal) {
   })
 }
 
+export function authorizationVersion(record: AuthorizationRecord) {
+  const { organizationId, owner, evidence, documentSha256, startsAt, endsAt, emergency,
+    hostname, port, path, methods, maxRps, maxConcurrency, prohibited, timezone } = record
+  return createHash('sha256').update(JSON.stringify({ organizationId, owner, evidence, documentSha256,
+    startsAt, endsAt, emergency, hostname, port, path, methods, maxRps, maxConcurrency, prohibited, timezone })).digest('hex')
+}
+
+export function authorizationState(record: AuthorizationRecord) {
+  if (record.state !== 'APPROVED') return record.state
+  if (!record.documentSha256 || record.reviewedVersion !== authorizationVersion(record)) return 'REVIEW_REQUIRED'
+  return Date.parse(record.endsAt) <= Date.now() ? 'EXPIRED' : 'APPROVED'
+}
+
 export function registerAudits(app: FastifyInstance, store: Store, fixturePort: number) {
   let active: { id: string; controller: AbortController; done: Promise<void> } | undefined
   let last = -Infinity
@@ -57,29 +73,49 @@ export function registerAudits(app: FastifyInstance, store: Store, fixturePort: 
       store.log('Prueba local interrumpida', run.id)
     })
   }
-  app.get('/api/authorizations', () => store.list<AuthorizationRecord>('authorizations').map((item) => ({
-    ...item, effectiveState: item.state === 'APPROVED' && Date.parse(item.endsAt) <= Date.now() ? 'EXPIRED' : item.state,
-  })))
-  app.post('/api/authorizations', (request, reply) => store.transaction(() => {
-    const value = parse(authorization, request.body)
+  const present = <T extends AuthorizationRecord>(record: T) => ({
+    ...record, effectiveState: authorizationState(record), contentVersion: authorizationVersion(record),
+  })
+  function createAuthorization(value: Authorization, supersedes?: string) {
     must(store.find('organizations', value.organizationId))
     const engagement = must(store.list('engagements', value.organizationId)[0])
-    const record = store.insert<AuthorizationRecord>('authorizations', { ...value, hostname: value.hostname.toLowerCase(), state: 'PENDING' }, engagement.id)
+    const record = store.insert<AuthorizationRecord>('authorizations', {
+      ...value, hostname: value.hostname.toLowerCase(), state: 'PENDING', supersedes,
+    }, engagement.id)
     store.insert('scope_assets', {
       hostname: record.hostname, port: record.port, path: record.path, methods: record.methods,
       maxRps: record.maxRps, maxConcurrency: record.maxConcurrency,
     }, record.id)
     store.log('Autorización registrada', record.id)
-    return reply.code(201).send(record)
+    return record
+  }
+  app.get('/api/authorizations', () => store.list<AuthorizationRecord>('authorizations').map(present))
+  app.post('/api/authorizations', (request, reply) => store.transaction(() =>
+    reply.code(201).send(present(createAuthorization(parse(authorization, request.body))))))
+  app.post<{ Params: { id: string } }>('/api/authorizations/:id/supersede', (request, reply) => store.transaction(() => {
+    const previous = get(request.params.id)
+    const { replacement, contentVersion } = parse(z.strictObject({ replacement: authorization, contentVersion: sha256 }), request.body)
+    if (previous.supersededBy || contentVersion !== authorizationVersion(previous) || replacement.organizationId !== previous.organizationId) {
+      throw problem(409, 'La versión seleccionada cambió o no corresponde a esta organización.')
+    }
+    const next = createAuthorization(replacement, previous.id)
+    store.update<AuthorizationRecord>('authorizations', previous.id, { ...previous, state: 'REVOKED', supersededBy: next.id })
+    store.log('Autorización reemplazada', previous.id)
+    return reply.code(201).send(present(next))
   }))
   app.post<{ Params: { id: string } }>('/api/authorizations/:id/review', (request) => store.transaction(() => {
     const record = get(request.params.id)
-    const { reviewer } = parse(review, request.body)
-    if (record.state !== 'PENDING' || !record.evidence || !record.emergency || Date.parse(record.endsAt) <= Date.now()) {
-      throw problem(409, 'La revisión requiere estado pendiente, evidencia, contacto de emergencia y una fecha vigente.')
+    const { reviewer, contentVersion } = parse(versionedReview, request.body)
+    const state = authorizationState(record)
+    if (contentVersion !== authorizationVersion(record) || record.supersededBy ||
+      !['PENDING', 'REVIEW_REQUIRED'].includes(state) || !record.evidence || !record.documentSha256 ||
+      !record.emergency || Date.parse(record.endsAt) <= Date.now()) {
+      throw problem(409, 'La revisión requiere la versión vigente, la referencia y SHA-256 del documento, y un contacto de emergencia.')
     }
     store.log('Autorización revisada en el registro', record.id)
-    return store.update('authorizations', record.id, { ...record, state: 'APPROVED', reviewer, reviewedAt: new Date().toISOString() })
+    return present(store.update<AuthorizationRecord>('authorizations', record.id, {
+      ...record, state: 'APPROVED', reviewer, reviewedAt: new Date().toISOString(), reviewedVersion: contentVersion,
+    }))
   }))
   app.post<{ Params: { id: string } }>('/api/authorizations/:id/revoke', (request) => store.transaction(() => {
     const record = get(request.params.id)
@@ -90,7 +126,10 @@ export function registerAudits(app: FastifyInstance, store: Store, fixturePort: 
   app.get('/api/lab/runs', () => store.list<Run>('audit_runs').slice(0, 100))
   app.get<{ Params: { id: string } }>('/api/lab/runs/:id', (request) => {
     const run = getRun(request.params.id)
-    return { run, evidence: store.list<Evidence>('evidence_refs', run.id), findings: store.list('findings', run.id) }
+    const findings = run.mode === 'REVISION_DOCUMENTAL'
+      ? store.list<Finding>('findings', run.id).map((item) => ({ ...item, contentVersion: findingVersion(item) }))
+      : store.list('findings', run.id)
+    return { run, evidence: store.list<Evidence>('evidence_refs', run.id), findings }
   })
   app.post('/api/lab/runs', (request, reply) => {
     const input = parse(requestSchema, request.body)
@@ -99,7 +138,9 @@ export function registerAudits(app: FastifyInstance, store: Store, fixturePort: 
       path: input.path ?? fixturePath, method: input.method ?? 'HEAD',
     } : input
     const record = input.authorizationId ? store.find<AuthorizationRecord>('authorizations', input.authorizationId) : undefined
-    const decision = scopePolicy(target, fixturePort, record)
+    const scoped = record && record.reviewedVersion !== authorizationVersion(record)
+      ? { ...record, reviewedVersion: undefined } : record
+    const decision = scopePolicy(target, fixturePort, scoped)
     const base = { mode: input.mode, policyVersion, tool, authorizationId: record?.id }
     if (!decision.allowed) {
       const blocked = store.transaction(() => {
@@ -170,4 +211,3 @@ export function registerAudits(app: FastifyInstance, store: Store, fixturePort: 
   })
   return { getRun, tool }
 }
-
