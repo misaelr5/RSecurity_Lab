@@ -18,6 +18,8 @@ test('campañas agrupan fichas sin duplicar y miden hitos explícitos durante la
   const other = org('Solo respuesta', 'Ganado')
   const excluded = org('Excluida', 'No contactar')
   const discarded = org('Descartada', 'Perdido')
+  const archived = org('Archivada')
+  store.update('organizations', archived.id, { ...archived, archivedAt: new Date().toISOString() })
   const created = await post('/api/campaigns', { name: 'Ronda A', region: 'Traslasierra', industry: 'Turismo', targetCount: 20 })
   assert.equal(created.statusCode, 201, created.body)
   const campaign = created.json()
@@ -26,8 +28,8 @@ test('campañas agrupan fichas sin duplicar y miden hitos explícitos durante la
   assert.equal(campaign.metrics.responseRate, null)
   assert.equal((await post('/api/campaigns', { name: 'RONDA Á' })).statusCode, 409)
 
-  const attached = await post(path + '/members', { organizationIds: [old.id, next.id, next.id, other.id, excluded.id, discarded.id] })
-  assert.deepEqual(attached.json(), { added: 3, existing: 0, excluded: 2 })
+  const attached = await post(path + '/members', { organizationIds: [old.id, next.id, next.id, other.id, excluded.id, discarded.id, archived.id] })
+  assert.deepEqual(attached.json(), { added: 3, existing: 0, excluded: 3 })
   assert.deepEqual((await post(path + '/members', { organizationIds: [next.id] })).json(), { added: 0, existing: 1, excluded: 0 })
   assert.equal((await post(path + '/members', { organizationIds: [randomUUID()] })).statusCode, 404)
 

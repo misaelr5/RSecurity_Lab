@@ -5,7 +5,8 @@ import type { FastifyInstance } from 'fastify'
 import { attach, parse, problem } from './http.ts'
 import type { registerPortfolio } from './portfolio.ts'
 import type { Store } from './store.ts'
-import { exportCommercialGeometry } from './commercial-map.ts'
+import { exportCommercialGeometry, verifiedLocation } from './commercial-map.ts'
+import { identityKeys } from './prospect-identity.ts'
 
 const filters = z.strictObject({
   format: z.enum(['json', 'csv', 'crm', 'geojson']).default('json'), city: text(120).optional(), region: text(120).optional(),
@@ -33,6 +34,7 @@ const campaign = stamp.extend({ name: required(160), status: z.enum(['ACTIVA', '
 const company = stamp.extend(identity.shape).extend({
   ...prospect.pick({ status: true, consent: true, verifiedAt: true, nextFollowUp: true }).shape,
   website: publicReference, sourceUrl: publicReference, archivedAt: instant.optional(),
+  mapLocation: verifiedLocation.optional(),
   campaignId: id.optional(), commercialCampaignId: id.optional(), confidence: confidence.optional(),
   engagement: stamp, contact: stamp, sources: z.array(reference).max(100), milestones: z.array(milestone).max(200),
   memberships: z.array(membership).max(100), knownIdentities: z.array(identityAlias).max(100), priority: z.number().int().min(0).max(100).nullable(),
@@ -55,11 +57,12 @@ type Archive = z.output<typeof archive>
 type Candidate = z.output<typeof candidate>
 type Membership = z.output<typeof membership>
 type Campaign = z.output<typeof campaign>
+type StoredLot = Pick<z.output<typeof lot>, 'state' | 'goal' | 'campaignId'> & { provider: string }
 type ResearchRow = { record: z.output<typeof identity> & { website: string; confidence: Candidate['confidence']; evidence: Source };
   outcome: Candidate['outcome']; organizationId?: string; reviewedAt?: string; reviewer?: string }
 type StoredCompany = Prospect & {
   campaignId?: string; commercialCampaignId?: string; archivedAt?: string; confidence?: z.output<typeof confidence>; documentaryMilestones?: Milestone[];
-  knownIdentities?: string[]; documentaryPriority?: number | null;
+  knownIdentities?: string[]; documentaryPriority?: number | null; mapLocation?: z.output<typeof verifiedLocation>;
 }
 
 const metadata = ({ id, createdAt, updatedAt }: Stamp) => ({ id, createdAt, updatedAt })
@@ -68,6 +71,12 @@ const commercialIdentity = ({ name, city, region, industry, province, applicatio
 const same = (filter: string | undefined, value: string) => !filter || normalize(filter) === normalize(value)
 const selectedId = (filter: string | undefined, value: string | null | undefined) =>
   !filter || (filter === 'none' ? !value : filter === value)
+
+function lotTotals(results: readonly Pick<ResearchRow, 'outcome'>[]) {
+  const count = (outcome: Candidate['outcome']) => results.filter((item) => item.outcome === outcome).length
+  return { found: results.length, verified: count('IMPORTADO'), imported: count('IMPORTADO'), duplicates: count('DUPLICADO'),
+    excluded: count('EXCLUIDO'), pending: count('EN_REVISION') + count('ACTUALIZAR'), skipped: count('FUERA_DE_CUPO') }
+}
 
 function validateRelationships(data: Archive) {
   const lots = new Set(data.lots.map((item) => item.id))
@@ -153,7 +162,7 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
           status: optedOut(item) ? 'No contactar' : item.status, consent: optedOut(item) ? 'Excluido' : item.consent,
           archivedAt: item.archivedAt, campaignId: item.campaignId && selectedLots.has(item.campaignId) ? item.campaignId : undefined,
           commercialCampaignId: item.commercialCampaignId && selectedCampaigns.has(item.commercialCampaignId) ? item.commercialCampaignId : undefined,
-          confidence: item.confidence, website: item.website, sourceUrl: item.sourceUrl,
+          confidence: item.confidence, website: item.website, sourceUrl: item.sourceUrl, mapLocation: item.mapLocation,
           verifiedAt: item.verifiedAt, nextFollowUp: item.nextFollowUp, sources, milestones,
           priority: item.documentaryPriority === undefined ? portfolio.priorityScore(item.id) : item.documentaryPriority,
           knownIdentities: (item.knownIdentities ?? []).filter((entry) => identityAlias.safeParse(entry).success),
@@ -185,7 +194,7 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
     const query = parse(filters, request.query)
     const history = exportHistory(query)
     if (query.format === 'crm') return attach(reply, 'reac-leads-v1.csv', 'text/csv; charset=utf-8',
-      portfolio.crmExport(true, new Set(history.companies.map(({ id }) => id))))
+      portfolio.crmExport(true, new Set(history.companies.map(({ id }) => id)), true))
     if (query.format === 'geojson') {
       const features = [...history.companies.map((item) => ({ item, kind: 'empresa' as const })),
         ...history.candidates.filter((item) => !item.organizationId).map((item) => ({ item, kind: 'candidata' as const }))]
@@ -218,6 +227,11 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
     validateRelationships(data)
     return store.transaction(() => {
       const result = { restored: 0, unchanged: 0, conflicts: 0, candidates: 0, campaigns: 0, lots: 0, exclusions: 0 }
+      const excludedIdentities = new Set([
+        ...store.list<StoredCompany>('organizations').filter(optedOut).flatMap((item) => [...identityKeys(item), ...item.knownIdentities ?? []]),
+        ...store.list<ResearchRow>('research_candidates').filter((item) => item.outcome === 'EXCLUIDO' && item.reviewedAt)
+          .flatMap(({ record }) => identityKeys({ ...prospect.parse(commercialIdentity(record)), ...record })),
+      ])
       const campaignIds = new Set<string>()
       for (const item of [...data.campaigns].reverse()) {
         const key = normalize(item.name)
@@ -236,7 +250,7 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
       }
       const companyIds = new Set<string>()
       for (const item of data.companies) {
-        const { engagement, contact, sources, memberships, milestones, archivedAt, campaignId, commercialCampaignId, confidence, knownIdentities, priority, ...fields } = item
+        const { engagement, contact, sources, memberships, milestones, archivedAt, campaignId, commercialCampaignId, confidence, knownIdentities, priority, mapLocation, ...fields } = item
         const record = prospect.parse({ ...commercialIdentity(fields), website: fields.website, sourceUrl: fields.sourceUrl,
           verifiedAt: fields.verifiedAt, status: fields.status, consent: fields.consent, nextFollowUp: fields.nextFollowUp })
         const key = organizationKey(record)
@@ -249,6 +263,7 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
           continue
         }
         if (store.find('organizations', key, 'unique_key')) { result.conflicts++; continue }
+        if ([...identityKeys(record), ...knownIdentities].some((value) => excludedIdentities.has(value))) { result.conflicts++; continue }
         if (store.find('engagements', engagement.id) || store.find('contacts', contact.id) ||
             milestones.some((event) => store.find('pipeline_events', event.id)) ||
             sources.some((entry) => store.find('public_sources', entry.id) || entry.observations.some((note) => store.find('observations', note.id)))) {
@@ -256,7 +271,7 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
         }
         store.restoreRow('organizations', { ...metadata(item), parent: null }, { ...record, archivedAt, campaignId, confidence, knownIdentities,
           commercialCampaignId: commercialCampaignId && campaignIds.has(commercialCampaignId) ? commercialCampaignId : undefined,
-          origin: 'HISTORIAL_COMERCIAL_V1', documentaryPriority: priority, documentaryMilestones: milestones.filter((event) => documentaryStages.has(event.stage)) }, key)
+          origin: 'HISTORIAL_COMERCIAL_V1', mapLocation, documentaryPriority: priority, documentaryMilestones: milestones.filter((event) => documentaryStages.has(event.stage)) }, key)
         store.restoreRow('engagements', { ...engagement, parent: item.id }, { status: record.status, nextFollowUp: record.nextFollowUp })
         store.restoreRow('contacts', { ...contact, parent: item.id }, { contact: '', email: '', phone: '', consent: record.consent,
           sourceUrl: record.sourceUrl, optOut: optedOut(record) })
@@ -290,19 +305,30 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
         byJob.set(item.jobId, list)
       }
       for (const job of data.lots) {
-        const already = store.find('research_jobs', job.id)
-        if (already) continue
+        const already = store.find<StoredLot>('research_jobs', job.id)
+        if (already && (already.createdAt !== job.createdAt || already.goal !== job.goal || !lot.shape.state.safeParse(already.state).success ||
+          (already.campaignId && job.campaignId && already.campaignId !== job.campaignId))) {
+          throw problem(409, 'La procedencia de un lote difiere del historial local. Revisá el archivo antes de continuar.')
+        }
         const results = byJob.get(job.id) ?? []
-        const count = (outcome: Candidate['outcome']) => results.filter((item) => item.outcome === outcome).length
-        store.restoreRow('research_jobs', { ...metadata(job), parent: null }, {
-          provider: 'historial', state: job.state, goal: job.goal, found: results.length, verified: count('IMPORTADO'), imported: count('IMPORTADO'),
-          duplicates: count('DUPLICADO'), excluded: count('EXCLUIDO'), pending: count('EN_REVISION'), skipped: count('FUERA_DE_CUPO'), errors: job.state === 'FALLIDO' ? 1 : 0,
-          reason: 'Selección reimportada desde historial comercial.', requestHash: '',
-          campaignId: job.campaignId && campaignIds.has(job.campaignId) ? job.campaignId : undefined,
-        })
-        result.lots++
+        if (!already) {
+          store.restoreRow('research_jobs', { ...metadata(job), parent: null }, {
+            provider: 'historial', state: job.state, goal: job.goal, ...lotTotals(results), errors: job.state === 'FALLIDO' ? 1 : 0,
+            reason: 'Selección reimportada desde historial comercial.', requestHash: '',
+            campaignId: job.campaignId && campaignIds.has(job.campaignId) ? job.campaignId : undefined,
+          })
+          result.lots++
+        }
+        const before = result.candidates
         for (const item of [...results].reverse()) {
-          if (store.find('research_candidates', item.id)) throw problem(409, 'Un resultado de investigación ya está asociado con otro lote.')
+          const existing = store.find<ResearchRow>('research_candidates', item.id)
+          if (existing) {
+            if (existing.parent !== job.id || existing.createdAt !== item.createdAt) {
+              throw problem(409, 'Un resultado de investigación tiene una procedencia distinta en el historial local.')
+            }
+            if (item.outcome === 'EXCLUIDO' && item.reviewedAt && !(existing.outcome === 'EXCLUIDO' && existing.reviewedAt)) result.conflicts++
+            continue
+          }
           const confirmed = item.organizationId && companyIds.has(item.organizationId) ? item.organizationId : undefined
           store.restoreRow('research_candidates', { ...metadata(item), parent: job.id }, {
             outcome: item.outcome, organizationId: confirmed, reason: 'Resultado documental importado.',
@@ -314,6 +340,9 @@ export function registerHistory(app: FastifyInstance, store: Store, portfolio: R
           })
           result.candidates++
           if (item.outcome === 'EXCLUIDO' && item.reviewedAt) result.exclusions++
+        }
+        if (already?.provider === 'historial' && result.candidates > before) {
+          store.update('research_jobs', job.id, { ...already, ...lotTotals(store.list<ResearchRow>('research_candidates', job.id)) })
         }
       }
       if (result.restored || result.candidates || result.campaigns || result.lots || result.exclusions) store.log('Historial comercial reimportado')

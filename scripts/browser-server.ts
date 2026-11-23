@@ -10,6 +10,7 @@ const auth = { salt, hash: scryptSync('clave-sintetica-de-pruebas-e2e', Buffer.f
 const catalog = discoveryFile.parse(JSON.parse(readFileSync(resolve('fixtures/investigacion-demo.json'), 'utf8')))
 const researchCatalog = { ...catalog, records: catalog.records.map((item) => ({ ...item, name: 'Comercio Catálogo QA', website: 'https://catalogo-qa.example/',
   confidence: 'ALTA' as const, evidence: { ...item.evidence, url: 'https://catalogo-qa.example/ayuda', consultedAt: new Date().toISOString().slice(0, 10) } })) }
-const app = createApp({ database: ':memory:', port: 4331, fixturePort: fixture.port, bundle: resolve('apps/web/dist'), operator: auth, researchCatalog })
-await app.listen({ host: '127.0.0.1', port: 4331 })
+const port = Number(process.env.REAC_E2E_PORT ?? '4331')
+const app = createApp({ database: ':memory:', port, fixturePort: fixture.port, bundle: resolve('apps/web/dist'), operator: auth, researchCatalog })
+await app.listen({ host: '127.0.0.1', port })
 process.once('SIGTERM', async () => { await app.close(); await fixture.close() })

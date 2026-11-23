@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, renameSync, rmSync } from 'node:fs'
+import { mkdirSync, realpathSync, renameSync, rmSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
+import type { BatchActivity } from './research-activity.ts'
 
 export const schemaVersion = 4
 type Table = 'organizations' | 'contacts' | 'engagements' | 'public_sources' | 'observations' | 'outreach_drafts' | 'authorizations' | 'scope_assets' | 'audit_runs' | 'findings' | 'evidence_refs' | 'activity_log' | 'report_reviews' | 'public_assets' | 'pipeline_events' | 'research_jobs' | 'research_candidates' | 'research_inputs' | 'saved_searches' | 'campaigns' | 'campaign_memberships' | 'enrichment_proposals'
@@ -114,9 +115,26 @@ export function openStore(path: string) {
       throw error
     }
   }
-  function log(action: string, entity?: string) {
-    insert('activity_log', { action, entity, actor: 'operador local' })
+  function acquireRuntime() {
+    if (path === ':memory:') return () => {}
+    const filename = realpathSync.native(path)
+    const key = process.platform === 'win32' ? filename.toLowerCase() : filename
+    const owner = randomUUID()
+    db.exec('CREATE TABLE IF NOT EXISTS app_runtime (slot INTEGER PRIMARY KEY CHECK(slot=1), owner TEXT NOT NULL, pid INTEGER NOT NULL, file TEXT NOT NULL) STRICT')
+    transaction(() => {
+      const existing = db.prepare('SELECT pid, file FROM app_runtime WHERE slot=1').get()
+      if (existing?.file === key && typeof existing.pid === 'number' && existing.pid > 0) {
+        let alive = true
+        try { process.kill(existing.pid, 0) } catch (error) { alive = (error as NodeJS.ErrnoException).code !== 'ESRCH' }
+        if (alive) throw new Error('Ya existe una instancia de Security Lab abierta con esta base SQLite.')
+      }
+      db.prepare('INSERT OR REPLACE INTO app_runtime VALUES (1, ?, ?, ?)').run(owner, process.pid, key)
+    })
+    return () => { db.prepare('DELETE FROM app_runtime WHERE slot=1 AND owner=?').run(owner) }
   }
-  return { db, list, count, find, insert, restoreRow, update, remove, transaction, log }
+  function log(action: string, entity?: string, batch?: BatchActivity) {
+    insert('activity_log', { action, entity, actor: 'operador local', batch })
+  }
+  return { db, list, count, find, insert, restoreRow, update, remove, transaction, log, acquireRuntime }
 }
 export type Store = ReturnType<typeof openStore>

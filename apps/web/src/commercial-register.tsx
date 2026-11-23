@@ -11,12 +11,13 @@ type Company = {
 }
 export function CommercialRegister({ revision, refresh, exportOnly = false }: { revision: number; refresh: () => void; exportOnly?: boolean }) {
   const [query, setQuery] = useState({ segment: 'todas', city: '', region: '', status: '', q: '', campaign: '' })
-  const [extras, setExtras] = useState({ from: '', to: '', industry: '', archived: 'all' })
+  const [extras, setExtras] = useState({ from: '', to: '', industry: '', archived: 'all', campaign: '' })
   const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value)).toString()
   const historyParams = new URLSearchParams(Object.entries({ city: query.city, region: query.region, status: query.status, q: query.q,
-    ...(query.campaign === 'none' ? { campaign: 'none' } : query.campaign ? { lot: query.campaign } : {}), ...extras }).filter(([, value]) => value)).toString()
+    lot: query.campaign, ...extras }).filter(([, value]) => value)).toString()
   const result = useResource<Company[]>('/commercial/companies?' + params, revision)
   const campaigns = useResource<{ id: string; createdAt: string }[]>('/commercial/campaigns', revision)
+  const commercialCampaigns = useResource<{ id: string; name: string }[]>('/campaigns', revision)
   return <><section className="panel">
     <h2>{exportOnly ? 'Exportar historial' : 'Historial global'}</h2>
     <div className="fields v4-fields">
@@ -29,11 +30,15 @@ export function CommercialRegister({ revision, refresh, exportOnly = false }: { 
         <option value="">Todos</option>{statuses.map((item) => <option key={item}>{item}</option>)}
       </select></label>
       <label className="field">Empresa o rubro<input value={query.q} onChange={(event) => setQuery({ ...query, q: event.target.value })} maxLength={120} /></label>
-      <label className="field">Campaña<select value={query.campaign} onChange={(event) => setQuery({ ...query, campaign: event.target.value })}>
-        <option value="">Todas</option><option value="none">Sin campaña</option>
+      <label className="field">Lote de investigación<select value={query.campaign} onChange={(event) => setQuery({ ...query, campaign: event.target.value })}>
+        <option value="">Todos</option><option value="none">Sin lote</option>
         {campaigns.value?.map((item) => <option key={item.id} value={item.id}>Lote del {when(item.createdAt)}</option>)}
       </select></label>
       {exportOnly && <>
+        <label className="field">Campaña comercial<select value={extras.campaign} onChange={(event) => setExtras({ ...extras, campaign: event.target.value })}>
+          <option value="">Todas</option><option value="none">Sin campaña</option>
+          {commercialCampaigns.value?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select></label>
         <label className="field">Rubro<input value={extras.industry} onChange={(event) => setExtras({ ...extras, industry: event.target.value })} maxLength={120} /></label>
         <label className="field">Desde<input type="date" value={extras.from} max={extras.to || undefined} onChange={(event) => setExtras({ ...extras, from: event.target.value })} /></label>
         <label className="field">Hasta<input type="date" value={extras.to} min={extras.from || undefined} onChange={(event) => setExtras({ ...extras, to: event.target.value })} /></label>
@@ -64,7 +69,7 @@ function HistoryImport({ refresh }: { refresh: () => void }) {
   const action = useAction(refresh)
   const [result, setResult] = useState<Restored>()
   return <section className="panel">
-    <h2>Reimportar historial versionado</h2><p className="muted">Incorporá registros e interacciones faltantes desde un JSON exportado por Security Lab. Revisá los conflictos después de la importación.</p>
+    <h2>Reimportar historial versionado</h2><p className="muted">Incorporá fichas nuevas con su historial desde un JSON exportado por Security Lab. Revisá los conflictos después de la importación.</p>
     <form className="fields v4-fields" onSubmit={(event) => {
       event.preventDefault()
       const data = new FormData(event.currentTarget)

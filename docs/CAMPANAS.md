@@ -9,24 +9,27 @@ Una campaña reúne fichas existentes y búsquedas bajo un nombre, un objetivo y
 3. Consultá empresas, lotes y métricas en el detalle. El vínculo incluye la fecha de incorporación y el lote asociado cuando la empresa ingresó por investigación.
 4. Pausá o cerrá una campaña para detener incorporaciones. El detalle preserva membresías y lotes existentes. Podés volver a activarla.
 
-Una empresa tiene una membresía por campaña. La exclusión de contacto bloquea incorporaciones nuevas. Si se aplica después, el vínculo anterior permanece y el detalle muestra la exclusión vigente. Agregar una ficha a una campaña no crea una comunicación ni cambia su estado.
+Una empresa tiene una membresía por campaña. Una exclusión de contacto, un descarte o el archivo de la ficha bloquean incorporaciones nuevas. Si ocurren después, el vínculo anterior permanece. Agregar una ficha a una campaña conserva el estado de la empresa y su historial.
 
 ## Métricas
 
 | Métrica | Criterio |
 | --- | --- |
 | Miembros | Una ficha por organización actualmente asociada. |
+| Investigadas | Candidatos de los lotes asociados, deduplicados por nombre y localidad normalizados, estén o no incorporados a la cartera. |
 | Verificadas | Miembros con al menos una observación pública revisada y asociada a una fuente. |
 | Contactadas | Miembros con un hito explícito de contacto desde su incorporación. |
 | Respuestas | Miembros contactados con un hito posterior de respuesta durante la pertenencia. |
-| Propuestas | Miembros contactados con un hito posterior de auditoría propuesta. |
-| Clientes | Miembros con estado comercial actual Ganado. |
+| Reuniones | Miembros con el hito explícito Reunión desde su incorporación. |
+| Propuestas | Miembros con el hito explícito Propuesta comercial enviada desde su incorporación. |
+| Clientes | Miembros con el hito explícito Cliente desde su incorporación. |
 | Excluidas | Miembros con exclusión vigente. |
+| Borradores pendientes | Borradores sin revisión de miembros que siguen habilitados para contacto. |
 | Lotes | Búsquedas explícitamente asociadas a la campaña. |
 | Tasa de respuesta | Respuestas divididas por contactadas. Se muestra sin valor cuando no hay contactadas. |
-| Conversión | Miembros contactados actualmente ganados divididos por contactadas. Se muestra sin valor cuando no hay contactadas. |
+| Conversión | Miembros con hito Cliente posterior al hito Contactado divididos por contactadas. Se muestra sin valor cuando no hay contactadas. |
 
-Los indicadores combinan el historial del pipeline y el estado actual de la cartera. Una empresa presente en varias campañas puede contribuir a varias métricas si los hitos ocurrieron durante cada pertenencia. Las tasas describen el grupo de empresas y su actividad registrada.
+El detalle desglosa los indicadores por localidad y rubro. Cada grupo calcula las tasas sobre sus propios miembros contactados. Una empresa presente en varias campañas puede contribuir a varias métricas si los hitos ocurrieron durante cada pertenencia. Los hitos registran actividad observada del grupo. Una campaña cerrada sigue mostrando cambios de actividad de los miembros históricos.
 
 ## Persistencia
 

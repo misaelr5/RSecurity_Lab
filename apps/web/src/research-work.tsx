@@ -4,22 +4,22 @@ import { DownloadButton, Empty, Feedback, Field, Resource, Review, useAction, us
 import { readSearchFields, researchStatus as status, SearchFields } from './research-fields.tsx'
 import type { ResearchJob as Job, ResearchMode, SearchConfiguration } from './research-fields.tsx'
 
-type Props = { revision: number; refresh: () => void; jobId?: string; reprospect?: boolean; campaignId?: string }
-type Result = { id: string; organizationId?: string; record: { name: string; city: string; confidence: string; evidence: { url: string; statement: string } }; outcome: string; reason: string }
+type Props = { revision: number; refresh: () => void; jobId?: string; reprospect?: boolean; campaignId?: string; initialMode?: ResearchMode }
+type Result = { id: string; organizationId?: string; contentVersion: string; record: { name: string; city: string; confidence: string; evidence: { url: string; statement: string } }; outcome: string; reason: string }
 const working = ['PENDIENTE', 'INVESTIGANDO', 'VERIFICANDO', 'IMPORTANDO']
 type Simulation = { provider: string; known: number; duplicates: number; exclusions: number; pending: number; available: number; quantity: number;
   estimated: boolean; cost: unknown; quota: unknown; limits: unknown; filters: SearchConfiguration['filters'] }
 
-export function ResearchWork({ revision, refresh, jobId, reprospect = false, campaignId }: Props) {
+export function ResearchWork({ revision, refresh, jobId, reprospect = false, campaignId, initialMode = 'discover' }: Props) {
   const capabilities = useResource<{ codex: boolean; catalogSize: number }>('/research/capabilities', revision)
   const jobs = useResource<Job[]>('/research/jobs', revision)
   const [requestId, setRequestId] = useState(() => crypto.randomUUID())
   const [attempt, setAttempt] = useState<{ id: string; payload: string }>()
-  const [mode, setMode] = useState<ResearchMode>('discover')
+  const [mode, setMode] = useState<ResearchMode>(initialMode)
   const [simulation, setSimulation] = useState<Simulation>()
   const action = useAction(refresh)
   return <>
-    {!jobId && <section className="panel"><h2>{reprospect ? 'Reprospectar' : 'Nueva búsqueda'}</h2>
+    {!jobId && <section className="panel"><h2>{reprospect ? 'Reprospectar' : initialMode === 'update' ? 'Actualizar prospectos por lote' : 'Nueva búsqueda'}</h2>
       <p className="muted">Buscá en el catálogo local o adjuntá un lote de fuentes públicas investigado en Orca.</p>
       <div className="toolbar v4-mode" role="group" aria-label="Modalidad de búsqueda">
         <button type="button" aria-pressed={mode === 'discover'} onClick={() => { setMode('discover'); setSimulation(undefined) }}>Descubrir empresas nuevas</button>
@@ -109,7 +109,7 @@ function ResearchJob({ id, revision, refresh }: { id: string; revision: number; 
       {item.outcome === 'EN_REVISION' && <details><summary>Revisar ficha</summary><Review
         label="Confirmar e incorporar" acknowledgement="Confirmé la fuente pública y que la ficha corresponde a esta organización." busy={action.busy}
         onReview={(payload) => void action.run(() => api('/research/jobs/' + id + '/candidates/' + item.id + '/review', 'POST',
-          { reviewer: payload.reviewer, confirm: payload.acknowledge }), 'Ficha incorporada.')} /></details>}
+          { reviewer: payload.reviewer, confirm: payload.acknowledge, contentVersion: item.contentVersion }), 'Ficha incorporada.')} /></details>}
     </li>)}</ul>}
   </section>}</Resource>
 }
@@ -123,8 +123,9 @@ function SimulationResult({ simulation }: { simulation: Simulation }) {
     <dl className="summary inset">
       <div><dt>Costo</dt><dd>{typeof simulation.cost === 'string' ? simulation.cost : 'Sin cotización informada'}</dd></div>
       <div><dt>Cuota</dt><dd>{typeof simulation.quota === 'string' ? simulation.quota : 'Sin cuota informada'}</dd></div>
-      <div><dt>Límites</dt><dd>{typeof simulation.limits === 'string' ? simulation.limits : 'Una búsqueda activa por instancia'}</dd></div>
-      <div><dt>Filtros</dt><dd>{[simulation.filters.region, simulation.filters.city, simulation.filters.industry, simulation.filters.applicationType].filter(Boolean).join(' · ') || 'Sin filtros adicionales'}</dd></div>
+      <div><dt>Límites</dt><dd>{Array.isArray(simulation.limits) ? simulation.limits.join(' ') : typeof simulation.limits === 'string' ? simulation.limits : 'Una búsqueda activa por instancia'}</dd></div>
+      <div><dt>Filtros</dt><dd>{[simulation.filters.regions?.join(', ') ?? simulation.filters.region, simulation.filters.cities?.join(', ') ?? simulation.filters.city,
+        simulation.filters.industries?.join(', ') ?? simulation.filters.industry, simulation.filters.applicationType].filter(Boolean).join(' · ') || 'Sin filtros adicionales'}</dd></div>
     </dl>
   </section>
 }

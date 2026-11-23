@@ -7,7 +7,7 @@ import { attach, must, parse } from './http.ts'
 import { authorizationState } from './audits.ts'
 import type { registerPortfolio } from './portfolio.ts'
 
-type Organization = Prospect & { origin?: string; campaignId?: string; confidence?: string; responsible?: string }
+type Organization = Prospect & { origin?: string; campaignId?: string; confidence?: string; responsible?: string; archivedAt?: string }
 type Activity = { action: string; actor: string; entity?: string }
 type ResearchCandidate = {
   record: Pick<Prospect, 'name' | 'region' | 'city' | 'industry' | 'website' | 'applicationType'> & { evidence: Pick<Source, 'url'> }; outcome: string; reason: string
@@ -57,7 +57,10 @@ export function registerCommercialRegister(app: FastifyInstance, store: Store, p
     const sources = new Map(sourceRows.map((entry) => [entry.parent, entry.url]))
     const statusVerification = new Set(store.list<{ reviewedAt?: string; sourceId?: string; level?: string }>('observations')
       .filter((entry) => entry.reviewedAt && entry.level === 'OBSERVACION_PUBLICA').map((entry) => entry.parent))
-    const verified = new Set(sourceRows.filter((entry) => statusVerification.has(entry.id)).map((entry) => entry.parent))
+    const today = new Date().toISOString().slice(0, 10)
+    const verified = new Set(sourceRows
+      .filter((entry) => entry.consultedAt <= today && statusVerification.has(entry.id))
+      .map((entry) => entry.parent))
     return store.list<Organization>('organizations').map((org) => {
       const activity = events.get(relationships.get(org.id) ?? '') ?? []
       const contact = activity.find((entry) => entry.stage === 'Contactado')
@@ -121,7 +124,8 @@ export function registerCommercialRegister(app: FastifyInstance, store: Store, p
     return { stage: events[0]?.stage ?? 'Descubierto', lastContact: events.find((entry) => entry.stage === 'Contactado')?.createdAt,
       next: org.nextFollowUp, events, history }
   })
-  app.get('/api/commercial/metrics', () => {
+  app.get('/api/commercial/metrics', (request) => {
+    const { days } = parse(z.strictObject({ days: z.enum(['7', '30', '90']).default('30') }), request.query)
     const entries = registered()
     const organizations = entries.map(({ org }) => org)
     const count = (name: (typeof segments)[number]) => entries.filter((entry) => entry.flags[name]).length
@@ -135,8 +139,18 @@ export function registerCommercialRegister(app: FastifyInstance, store: Store, p
         contacts: entries.filter(({ activity }) => activity.some((event) => event.stage === 'Contactado' && within(event.createdAt))).length }
     })
     const terminal = new Set(['COMPLETADO', 'PARCIAL', 'FALLIDO', 'CANCELADO'])
-    const pendingCandidates = researchedCandidates(new Set(organizations.map(organizationKey))).filter(({ outcome }) => outcome === 'EN_REVISION').length
-    const campaigns = store.list<{ state: string }>('research_jobs').filter((job) => terminal.has(job.state)).length
+    const jobs = store.list<{ state: string; duplicates?: number }>('research_jobs')
+    const settled = new Set(jobs.filter((job) => terminal.has(job.state)).map((job) => job.id))
+    const activeCompanies = new Set(entries.filter(({ org, flags }) => !org.archivedAt && !flags.excluidas && !flags.descartadas).map(({ org }) => org.id))
+    const pendingByCompany = new Map<string, { id: string; name: string }>()
+    for (const candidate of store.list<ResearchCandidate & { organizationId?: string }>('research_candidates')) {
+      if (!candidate.parent || !settled.has(candidate.parent)) continue
+      if (candidate.outcome !== 'EN_REVISION' && !(candidate.outcome === 'ACTUALIZAR' && candidate.organizationId && activeCompanies.has(candidate.organizationId))) continue
+      const key = candidate.organizationId ?? identity(candidate.record.name, candidate.record.city)
+      if (!pendingByCompany.has(key)) pendingByCompany.set(key, { id: candidate.id, name: candidate.record.name })
+    }
+    const pendingCandidates = pendingByCompany.size
+    const campaigns = jobs.filter((job) => terminal.has(job.state)).length
     const contacts = count('contactadas')
     const responses = entries.filter((entry) => entry.flags.contactadas && entry.flags.respondieron).length
     const clients = count('clientes')
@@ -144,16 +158,21 @@ export function registerCommercialRegister(app: FastifyInstance, store: Store, p
     const day = [today.getFullYear(), today.getMonth() + 1, today.getDate()].map((part) => String(part).padStart(2, '0')).join('-')
     return {
       total: entries.length, newWeek: weekly.at(-1)!.newCompanies,
+      newInPeriod: organizations.filter((org) => Date.parse(org.createdAt) >= today.getTime() - Number(days) * 86400_000).length,
+      duplicatesAvoided: jobs.reduce((sum, item) => sum + (item.duplicates ?? 0), 0),
+      activeCampaigns: store.list<{ status: string }>('campaigns').filter((campaign) => campaign.status === 'ACTIVA').length,
       verified: count('verificadas'), pending: count('pendientes') + pendingCandidates, pendingCandidates,
+      firstPendingCandidate: pendingByCompany.values().next().value ?? null,
       contacts, responses, clients, campaigns,
-      meetings: entries.filter((entry) => entry.flags.contactadas && entry.org.status === 'Reunión').length,
+      meetings: entries.filter((entry) => entry.flags.contactadas && entry.activity.some((event) => event.stage === 'Reunión')).length,
       proposals: entries.filter((entry) => entry.flags.contactadas && entry.activity.some((event) => event.stage === 'Auditoría propuesta')).length,
+      sentProposals: entries.filter((entry) => entry.flags.contactadas && entry.activity.some((event) => event.stage === 'Propuesta comercial enviada')).length,
       authorized: store.list<AuthorizationRecord>('authorizations')
         .filter((record) => authorizationState(record) === 'APPROVED' && Date.parse(record.startsAt) <= today.getTime()).length,
       responseRate: contacts ? responses / contacts : null, conversionRate: contacts ? contactedClients / contacts : null,
       regions: grouped(organizations, 'region'), industries: grouped(organizations, 'industry'), weekly,
       stages: pipelineStages.map((stage) => ({ stage, count: entries.filter((entry) => entry.stage === stage).length })),
-      followUps: entries.filter(({ flags, org }) => !flags.excluidas && !flags.descartadas && org.nextFollowUp && org.nextFollowUp >= day)
+      followUps: entries.filter(({ flags, org }) => !flags.excluidas && !flags.descartadas && !org.archivedAt && org.nextFollowUp && org.nextFollowUp >= day)
         .sort((a, b) => a.org.nextFollowUp.localeCompare(b.org.nextFollowUp)).slice(0, 10)
         .map(({ org }) => ({ id: org.id, name: org.name, date: org.nextFollowUp })),
     }

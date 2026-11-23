@@ -84,16 +84,21 @@ export function PipelineOverview({ revision }: { revision: number }) {
 
 export function OpportunityScore({ id, revision }: Pick<ItemProps, 'id' | 'revision'>) {
   const [filter, setFilter] = useState('')
-  const resource = useResource<{ score: number | null; signals: { label: string; weight: number; present: boolean; factor: number; detail: string }[] }>(
+  const resource = useResource<{ score: number | null; signals: { label: string; weight: number; present: boolean; factor: number; detail: string }[];
+    recommendation?: { fact: string; hypothesis: string; opportunity: string; sourceId?: string } | null }>(
     '/prospects/' + id + '/score' + filter, revision)
   return <section className="panel">
     <h2>Prioridad comercial</h2>
     <p className="muted">Pondera la preparación de la ficha y la calidad de su evidencia para el contacto.</p>
     <Resource result={resource}>{(result) => <>
-      <p>{result.score === null ? 'Ficha excluida de contacto' : 'Puntaje ' + result.score + ' de 100'}</p>
+      <p>{result.score === null ? 'Ficha fuera de la cartera comercial activa' : 'Puntaje ' + result.score + ' de 100'}</p>
       <ul className="records">{result.signals.map((signal) => <li key={signal.label}>{signal.label}<small>
         {signal.present ? signal.detail : 'Pendiente'} · {Math.round(signal.factor * signal.weight)} de {signal.weight} puntos
       </small></li>)}</ul>
+      {result.recommendation && <div className="inset"><h3>Recomendación comercial</h3><dl className="summary">
+        <div><dt>Hecho publicado</dt><dd>{result.recommendation.fact}</dd></div><div><dt>Hipótesis comercial</dt><dd>{result.recommendation.hypothesis}</dd></div>
+        <div className="wide"><dt>Oportunidad potencial</dt><dd>{result.recommendation.opportunity}</dd></div>
+      </dl>{result.recommendation.sourceId && <a href={'#evidence/' + id}>Consultar evidencia pública</a>}</div>}
     </>}</Resource>
     <details><summary>Ajustar pesos para esta ficha</summary>
       <form className="fields" onSubmit={(event) => {

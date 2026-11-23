@@ -1,5 +1,7 @@
 # Prospección comercial V3
 
+El flujo V4 reutiliza esta integración y agrega reprospección, búsquedas guardadas, revisión y simulación. La instancia V4 usa `4327`. [Operación V4](REPROSPECCION.md)
+
 ## Inicio en Windows
 
 Estos nombres corresponden al piloto V3 restaurado en la carpeta privada. En una instalación distinta, elegí la base y el catálogo de esa instalación. La clave local se crea con `scripts/operator.ps1` cuando el perfil todavía carece de operador.

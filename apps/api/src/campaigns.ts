@@ -1,5 +1,5 @@
 import { id, normalize, optedOut, required, text, z } from '@reac/core'
-import type { Prospect, Source } from '@reac/core'
+import type { PipelineEvent, Prospect, Source } from '@reac/core'
 import type { FastifyInstance } from 'fastify'
 import { must, parse, problem } from './http.ts'
 import type { Store } from './store.ts'
@@ -26,14 +26,15 @@ type Campaign = z.output<typeof campaignInput>
 type Membership = { campaignId: string; origin: 'MANUAL' | 'INVESTIGACION'; jobId?: string }
 type ResearchJob = { state: string; campaignId?: string }
 type Candidate = { record: Pick<Prospect, 'name' | 'city' | 'industry'> }
-type Timeline = { stage: string }
+type StoredProspect = Prospect & { archivedAt?: string }
 type CampaignMember = Pick<Prospect, 'name' | 'city' | 'region' | 'industry' | 'status'> & {
   id: string; campaignId: string; organizationId: string; joinedAt: string; origin: Membership['origin']; jobId?: string
   excluded: boolean; verified: boolean; contacted: boolean; responded: boolean; meeting: boolean; proposed: boolean; client: boolean; converted: boolean; pendingDrafts: number
 }
 
 const getCampaign = (store: Store, value: unknown) => must(store.find<Campaign>('campaigns', parse(id, value)))
-const unavailable = (org: Prospect, stage?: string) => optedOut(org) || org.status === 'Perdido' || ['Descartado', 'Excluido'].includes(stage ?? '')
+const unavailable = (org: StoredProspect, stage?: PipelineEvent['stage']) =>
+  optedOut(org) || Boolean(org.archivedAt) || org.status === 'Perdido' || stage === 'Descartado' || stage === 'Excluido'
 
 export function requireOpenCampaign(store: Store, campaignId: string) {
   const campaign = getCampaign(store, campaignId)
@@ -44,10 +45,10 @@ export function requireOpenCampaign(store: Store, campaignId: string) {
 // The API and research worker call this inside their own store transaction.
 export function addCampaignMember(store: Store, campaignId: string, organizationId: string, origin: Membership['origin'], jobId?: string) {
   requireOpenCampaign(store, campaignId)
-  const org = must(store.find<Prospect>('organizations', parse(id, organizationId)))
+  const org = must(store.find<StoredProspect>('organizations', parse(id, organizationId)))
   const key = campaignId + ':' + org.id
   const engagement = store.list('engagements', org.id)[0]
-  const stage = engagement && store.list<Timeline>('pipeline_events', engagement.id)[0]?.stage
+  const stage = engagement && store.list<PipelineEvent>('pipeline_events', engagement.id)[0]?.stage
   if (unavailable(org, stage)) return 'excluded'
   if (store.find('campaign_memberships', key, 'unique_key')) return 'existing'
   store.insert<Membership>('campaign_memberships', { campaignId, origin, jobId }, org.id, key)
@@ -83,10 +84,10 @@ function performanceBy(field: 'city' | 'industry', members: CampaignMember[], re
 }
 
 function campaignSnapshot(store: Store) {
-  const prospects = new Map(store.list<Prospect>('organizations').map((row) => [row.id, row]))
+  const prospects = new Map(store.list<StoredProspect>('organizations').map((row) => [row.id, row]))
   const engagements = new Map(store.list('engagements').map((row) => [row.parent, row.id]))
-  const events = new Map<string, ReturnType<typeof store.list<Timeline>>>()
-  for (const row of store.list<Timeline>('pipeline_events')) {
+  const events = new Map<string, ReturnType<typeof store.list<PipelineEvent>>>()
+  for (const row of store.list<PipelineEvent>('pipeline_events')) {
     if (!row.parent) continue
     const list = events.get(row.parent) ?? []
     list.push(row)
@@ -105,8 +106,8 @@ function campaignSnapshot(store: Store) {
     const history = events.get(engagements.get(org.id) ?? '') ?? []
     const activity = history.filter((event) => event.createdAt >= row.createdAt)
     const contact = activity.findLast((event) => event.stage === 'Contactado')
-    const hasEvent = (stage: string) => activity.some((event) => event.stage === stage)
-    const afterContact = (stage: string) => Boolean(contact && activity.some((event) => event.stage === stage && event.createdAt >= contact.createdAt))
+    const hasEvent = (stage: PipelineEvent['stage']) => activity.some((event) => event.stage === stage)
+    const afterContact = (stage: PipelineEvent['stage']) => Boolean(contact && activity.some((event) => event.stage === stage && event.createdAt >= contact.createdAt))
     return [{
       id: row.id, campaignId: row.campaignId, organizationId: org.id, name: org.name, city: org.city, region: org.region, industry: org.industry,
       status: org.status, excluded: optedOut(org), origin: row.origin, jobId: row.jobId, joinedAt: row.createdAt,

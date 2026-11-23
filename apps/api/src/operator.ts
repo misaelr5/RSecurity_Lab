@@ -14,7 +14,8 @@ const windowMs = 60_000
 
 export function registerOperator(app: FastifyInstance, operator?: Operator) {
   let session: { token: string; expires: number; last: number } | undefined
-  let researchSession: { token: string; expires: number } | undefined
+  const researchSessions: { token: string; expires: number }[] = []
+  const historySessions: { token: string; expires: number }[] = []
   let failures = 0
   let since = 0
   let running = false
@@ -33,16 +34,30 @@ export function registerOperator(app: FastifyInstance, operator?: Operator) {
   const suppliedToken = (request: FastifyRequest) => request.headers.authorization?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]
   function authorizedResearch(request: FastifyRequest, path: string) {
     const scopedRoute = (request.method === 'POST' && path === '/api/research/jobs') ||
-      (request.method === 'GET' && /^\/api\/research\/jobs\/[a-f0-9-]{36}\/summary$/i.test(path))
+      (request.method === 'POST' && /^\/api\/research\/jobs\/[a-f0-9-]{36}\/(?:resume|cancel)$/i.test(path)) ||
+      (request.method === 'GET' && /^\/api\/research\/jobs\/[a-f0-9-]{36}\/summary$/i.test(path)) ||
+      (request.method === 'POST' && path === '/api/research/simulate')
+    return scopedRoute && authorizedScoped(request, researchSessions)
+  }
+  function authorizedScoped(request: FastifyRequest, sessions: typeof researchSessions) {
     const token = suppliedToken(request)
-    return scopedRoute && researchSession && researchSession.expires > Date.now() && token &&
-      timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(researchSession.token, 'hex'))
+    if (!token) return false
+    const supplied = Buffer.from(token, 'hex')
+    const now = Date.now()
+    return sessions.some((entry) => entry.expires > now && timingSafeEqual(supplied, Buffer.from(entry.token, 'hex')))
+  }
+  function issueScoped(sessions: typeof researchSessions, ttl: number) {
+    const now = Date.now()
+    const token = randomBytes(32).toString('hex')
+    sessions.splice(0, sessions.length, ...sessions.filter((entry) => entry.expires > now).slice(-15), { token, expires: now + ttl })
+    return { sessionToken: token }
   }
   app.addHook('onRequest', async (request, reply) => {
     if (!operator) return
     const path = request.url.split('?')[0]
-    if (!path.startsWith('/api') || ['/api/operator/status', '/api/operator/login', '/api/operator/research-session'].includes(path)) return
-    if (!authenticated(request) && !authorizedResearch(request, path)) return reply.code(401).send({ message: 'Iniciá sesión para acceder a esta instancia.' })
+    if (!path.startsWith('/api') || ['/api/operator/status', '/api/operator/login', '/api/operator/research-session', '/api/operator/history-session'].includes(path)) return
+    const authorizedHistory = request.method === 'GET' && path === '/api/history/export' && authorizedScoped(request, historySessions)
+    if (!authenticated(request) && !authorizedResearch(request, path) && !authorizedHistory) return reply.code(401).send({ message: 'Iniciá sesión para acceder a esta instancia.' })
   })
   app.get('/api/operator/status', (request) => ({ required: Boolean(operator), authenticated: authenticated(request) }))
   async function verifyKey(value: unknown) {
@@ -69,13 +84,17 @@ export function registerOperator(app: FastifyInstance, operator?: Operator) {
   })
   app.post('/api/operator/research-session', async (request, reply) => {
     await verifyKey(request.body)
-    researchSession = { token: randomBytes(32).toString('hex'), expires: Date.now() + 15 * 60 * 1000 }
-    return reply.send({ sessionToken: researchSession.token })
+    return reply.send(issueScoped(researchSessions, 15 * 60 * 1000))
+  })
+  app.post('/api/operator/history-session', async (request, reply) => {
+    await verifyKey(request.body)
+    return reply.send(issueScoped(historySessions, 5 * 60 * 1000))
   })
   app.post('/api/operator/logout', (request, reply) => {
     parse(z.strictObject({}), request.body)
     session = undefined
-    researchSession = undefined
+    researchSessions.length = 0
+    historySessions.length = 0
     return reply.send({ authenticated: false })
   })
 }

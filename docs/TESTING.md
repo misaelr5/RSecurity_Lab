@@ -15,3 +15,7 @@ Los tests usan SQLite en memoria o directorios temporales. El smoke levanta la a
 - Chrome verifica el cambio de tema y su persistencia, el uso del sistema a 390 px, el lote desde el dashboard, la ficha, los marcadores y las descargas CSV y GeoJSON. `REAC_CAPTURE_DIR` habilita capturas de `#preview` con datos ficticios.
 
 [Bitácora de ejecuciones](ESTADO.md)
+
+## V4
+
+La línea base se validó con 21 pruebas de Node y 5 recorridos de Chrome antes de modificar. V4 agrega regresiones sobre archivo y rechazo, historial que cruza lotes, revisión obsoleta, continuidad del cupo, reintentos, cancelación, simulación local, guardado y cambio de filtros, enriquecimiento, acceso de CLI y preservación de contacto y etapas. El archivo JSON se prueba al reimportar dos selecciones diferentes de un mismo lote. `REAC_V4_CAPTURE_DIR` habilita las capturas de campañas con datos ficticios en ambos temas.

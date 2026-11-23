@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { discoveryRecord, prospect } from '@reac/core'
 import Fastify from 'fastify'
@@ -56,6 +55,15 @@ test('enriquecimiento compara evidencia, aplica una selección y conserva contac
   assert.deepEqual(approved.appliedFields, ['address', 'applicationType'])
   assert.equal(approved.comparison[0].current, 'Domicilio anterior')
   assert.equal(approved.reviewer, 'Operador')
+
+  const newPhone = '+54 (351) 555-0101'
+  const missing = (await post(path, { ...payload, fields: { phone: newPhone } })).json()
+  assert.equal(missing.comparison[0].disposition, 'NUEVO')
+  const fill = await post(path + '/' + missing.id + '/review', { ...review, fields: ['phone'], contentVersion: missing.contentVersion })
+  assert.equal(fill.statusCode, 200, fill.body)
+  assert.equal(store.find<typeof org>('organizations', org.id)?.phone, newPhone)
+  assert.equal(store.find<typeof contact>('contacts', contact.id)?.phone, newPhone)
+  assert.equal(store.find<typeof contact>('contacts', contact.id)?.email, org.email)
 })
 
 test('exclusión sobreviniente bloquea un borrador de investigación y mantiene el historial de rechazo', async (t) => {
@@ -66,7 +74,9 @@ test('exclusión sobreviniente bloquea un borrador de investigación y mantiene 
   const org = store.insert('organizations', prospect.parse({ name: 'Hotel ficticio', city: 'Nono', website: 'https://hotel.example/', region: 'Traslasierra', industry: 'Turismo' }))
   const record = discoveryRecord.parse({ name: org.name, city: org.city, region: org.region, industry: org.industry,
     website: org.website, evidence: source, opportunity: 'Revisar la atención comercial.', applicationType: 'Reservas' })
-  const ref = { jobId: randomUUID(), candidateId: randomUUID() }
+  const job = store.insert('research_jobs', {})
+  const candidate = store.insert('research_candidates', { record }, job.id)
+  const ref = { jobId: job.id, candidateId: candidate.id }
   const draft = store.transaction(() => proposeResearchEnrichment(store, org.id, record, ref))
   assert.deepEqual(draft.research, ref)
   assert.equal(store.find<typeof org>('organizations', org.id)?.applicationType, undefined)

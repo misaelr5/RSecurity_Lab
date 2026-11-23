@@ -1,5 +1,9 @@
 # Vista previa del dashboard
 
+El dashboard operativo abre con **Por resolver**. El enlace de la candidata abre su evidencia y su formulario de decisión. El enlace del borrador enfoca el mensaje pendiente dentro de la ficha. A continuación se muestran cartera, verificación, contactos, campañas y seguimientos. La evolución abarca ocho semanas y muestra un gráfico y una tabla cuando hay al menos dos semanas con actividad. Con una sola semana resume las altas y los contactos. El selector de período cambia el conteo de altas.
+
+En **Actividad reciente**, cada lote enlaza a su ejecución. Las nuevas ejecuciones guardan sus resultados al cierre. Cuando el registro histórico carece de ese resumen, la vista consulta la ejecución por ID e identifica las cifras como «Total actual del lote». Para evaluar esta composición con una copia de la cartera real, usá `http://127.0.0.1:4328/#dashboard`.
+
 Abrí la ruta local `#preview` para evaluar la interfaz con datos ficticios. La cabecera identifica la muestra y ofrece un enlace de retorno a la cartera operativa. Los indicadores, nombres de ejemplo y actividad se dibujan a partir de una cohorte ilustrativa y permanecen fuera de SQLite. Los accesos rápidos abren las secciones operativas que correspondan.
 
 ## Temas

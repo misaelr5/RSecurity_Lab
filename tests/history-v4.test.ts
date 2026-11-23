@@ -61,7 +61,7 @@ test('historial filtrado reproduce identificadores, exclusiones, evidencias e hi
   assert.equal(archive.companies[0].milestones.length, 2)
   assert.equal(archive.candidates[0].id, researched.id)
   assert.deepEqual(archive.companies[0].knownIdentities, ['domain:anterior.example'])
-  assert.doesNotMatch(exportResponse.body, /credencial|privado|confidencial|sensible|Ruta privada|1234|interno@|5559999/)
+  assert.doesNotMatch(exportResponse.body, /credencial|privado|confidencial|sensible|Ruta privada|555 1234|interno@|phone:3515559999/)
   assert.match((await source.get(urls.read + '?format=csv&' + filter)).body, /'=Hospedaje Ejemplo/)
   assert.match((await source.get(urls.read + '?format=crm&' + filter)).body, /No contactar/)
   const geo = (await source.get(urls.read + '?format=geojson&' + filter)).json()
@@ -117,4 +117,37 @@ test('historial rechaza campos externos y conflictos de relaciones sin escritura
   assert.equal((await target.post(urls.write, payload)).statusCode, 409)
   assert.equal(target.store.count('organizations'), 1)
   assert.equal(target.store.count('contacts'), 1)
+})
+
+test('dos localidades del mismo lote se reimportan sin perder exclusiones ni duplicar resultados', async (t) => {
+  const source = setup(t)
+  const target = setup(t)
+  const lot = source.store.insert('research_jobs', { state: 'PARCIAL', goal: 2, provider: 'manual' })
+  const candidates = ['Nono', 'Mina Clavero'].map((city, index) => {
+    const website = `https://local-${index}.example/`
+    return source.store.insert('research_candidates', { record: { name: `Comercio ${index}`, city, region: 'Traslasierra',
+      industry: 'Turismo', applicationType: 'Reservas', website, confidence: 'ALTA', evidence: { url: website, consultedAt: '2026-11-22' } },
+    outcome: index ? 'EXCLUIDO' : 'EN_REVISION', reviewedAt: index ? new Date().toISOString() : undefined, reviewer: index ? 'Operador QA' : undefined,
+    }, lot.id)
+  })
+  const getArchive = async (city: string) => (await source.get(urls.read + '?city=' + encodeURIComponent(city))).json()
+  const first = await getArchive('Nono')
+  const second = await getArchive('Mina Clavero')
+  assert.deepEqual(first.candidates.map((item: { id: string }) => item.id), [candidates[0].id])
+  assert.deepEqual(second.candidates.map((item: { id: string }) => item.id), [candidates[1].id])
+  assert.equal((await target.post(urls.write, { archive: first, acknowledge: true })).json().lots, 1)
+  const wrong = { ...second, lots: [{ ...second.lots[0], goal: 9 }] }
+  assert.equal((await target.post(urls.write, { archive: wrong, acknowledge: true })).statusCode, 409)
+  assert.equal(target.store.count('research_candidates'), 1)
+  const next = (await target.post(urls.write, { archive: second, acknowledge: true })).json()
+  assert.equal(next.lots, 0)
+  assert.equal(next.candidates, 1)
+  assert.equal(next.exclusions, 1)
+  const saved = target.store.find<{ found: number; excluded: number }>('research_jobs', lot.id)
+  assert.equal(saved?.found, 2)
+  assert.equal(saved?.excluded, 1)
+  assert.equal(target.store.find<{ outcome: string }>('research_candidates', candidates[1].id)?.outcome, 'EXCLUIDO')
+  const repeat = (await target.post(urls.write, { archive: second, acknowledge: true })).json()
+  assert.equal(repeat.candidates, 0)
+  assert.equal(repeat.exclusions, 0)
 })

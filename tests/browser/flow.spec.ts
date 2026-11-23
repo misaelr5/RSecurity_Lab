@@ -1,7 +1,11 @@
 import { test, expect } from '@playwright/test'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 
 test.beforeEach(async ({ page }) => {
+  await page.route(/^https:\/\/tile\.openstreetmap\.org\//, (route) => route.fulfill({ status: 200, contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=', 'base64') }))
   await page.goto('/')
   await page.getByLabel('Clave local').fill('clave-sintetica-de-pruebas-e2e')
   await page.getByRole('button', { name: 'Iniciar sesión' }).click()
@@ -31,7 +35,7 @@ test('vista previa y tema compartido entre el dashboard y el mapa', async ({ pag
   await expect(page.getByRole('heading', { name: 'Mapa de prospectos' })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await page.getByRole('link', { name: 'Dashboard', exact: true }).click()
-  await expect(page.locator('.table-scroll thead').first()).toHaveCSS('background-color', 'rgb(226, 236, 246)')
+  await expect(page.locator('.workbench-panel').first()).toHaveCSS('background-color', 'rgb(248, 250, 246)')
 })
 
 test('cartera desde CSV, aprobación manual, fixture e informe en Chrome', async ({ page }) => {
@@ -134,4 +138,130 @@ test('lote desde dashboard, ficha, mapa, historial y exportaciones', async ({ pa
   expect((await csv).suggestedFilename()).toBe('empresas-prospectadas.csv')
   await page.goto(lotPath)
   await expect(page.getByRole('heading', { name: 'Completado' })).toBeVisible()
+})
+
+test('V4 guarda una simulación, ejecuta filtros actuales y exporta historial', async ({ page }) => {
+  await page.goto('/#reprospect')
+  await page.getByLabel('Instrucción de búsqueda').fill('Buscá 2 empresas de Villa Dolores')
+  await page.getByRole('button', { name: 'Simular búsqueda' }).click()
+  await expect(page.getByRole('heading', { name: 'Resultado de la simulación' })).toBeVisible()
+  await expect(page.getByText('Simulación local, sin turno ni cargo de proveedor.')).toBeVisible()
+  await page.locator('summary').getByText('Guardar esta búsqueda').click()
+  await page.getByLabel('Nombre de la búsqueda').fill('Reprospección ficticia QA')
+  await page.getByRole('button', { name: 'Guardar esta búsqueda' }).click()
+  await page.goto('/#saved')
+  await expect(page.getByRole('heading', { name: 'Reprospección ficticia QA' })).toBeVisible()
+  await page.getByRole('button', { name: 'Ejecutar nuevamente' }).click()
+  await expect(page.getByRole('heading', { name: /^(Completado|Parcial)$/ })).toBeVisible()
+  await page.goto('/#review')
+  await expect(page.getByRole('heading', { name: 'Bandeja de revisión' })).toBeVisible()
+  await page.getByLabel('Clasificación').selectOption('duplicate')
+  await page.goto('/#exports')
+  const downloading = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'JSON de todo el historial' }).click()
+  expect((await downloading).suggestedFilename()).toBe('historial-comercial-v1.json')
+})
+
+test('V4 campañas y cobertura comparten la apariencia del dashboard', async ({ page }) => {
+  await page.goto('/#campaigns')
+  await expect(page.getByRole('heading', { name: 'Campañas comerciales' })).toBeVisible()
+  await page.getByRole('button', { name: 'Crear campaña' }).click()
+  await page.getByLabel('Nombre de campaña').fill('Campaña ficticia de QA')
+  await page.getByLabel('Objetivo', { exact: true }).fill('Validar el seguimiento comercial en una base de pruebas.')
+  await page.getByRole('button', { name: 'Guardar campaña' }).click()
+  await expect(page.getByRole('heading', { name: 'Campaña ficticia de QA' })).toBeVisible()
+  const campaignId = new URL(page.url()).hash.split('/')[1]
+  const token = await page.evaluate(() => sessionStorage.getItem('reac-operator-session'))
+  const headers = { Authorization: 'Bearer ' + token }
+  const response = await page.request.post('/api/v1/prospects', { headers, data: { name: 'Alojamiento comercial ficticio QA', industry: 'Turismo', city: 'Nono', region: 'Traslasierra' } })
+  expect(response.ok()).toBeTruthy()
+  const organizationId = (await response.json()).id
+  expect((await page.request.post('/api/v1/campaigns/' + campaignId + '/members', { headers, data: { organizationIds: [organizationId] } })).ok()).toBeTruthy()
+  expect((await page.request.post('/api/v1/prospects/' + organizationId + '/pipeline', { headers, data: { stage: 'Contactado', note: 'Contacto registrado solo en la base ficticia.' } })).ok()).toBeTruthy()
+  await page.reload()
+  await expect(page.getByRole('link', { name: 'Alojamiento comercial ficticio QA' })).toBeVisible()
+  const theme = page.getByLabel('Tema de la aplicación')
+  await page.setViewportSize({ width: 1440, height: 1080 })
+  for (const appearance of ['light', 'dark'] as const) {
+    await theme.selectOption(appearance)
+    await expect(page.locator('html')).toHaveAttribute('data-theme', appearance)
+    if (process.env.REAC_V4_CAPTURE_DIR) await page.screenshot({ path: resolve(process.env.REAC_V4_CAPTURE_DIR, `campanas-v4-${appearance}.png`), fullPage: true })
+  }
+  await page.getByRole('link', { name: 'Ver cobertura' }).click()
+  await expect(page.getByRole('heading', { name: 'Mapa de prospectos' })).toBeVisible()
+  await expect(page.getByText('Alojamiento comercial ficticio QA', { exact: true })).toBeVisible()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+})
+
+test('mapa de calles permite acercar, confirmar una ubicación y volver al contorno', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  const token = await page.evaluate(() => sessionStorage.getItem('reac-operator-session'))
+  const response = await page.request.post('/api/v1/prospects', { headers: { Authorization: 'Bearer ' + token },
+    data: { name: 'Punto exacto ficticio QA', city: 'Villa Dolores', region: 'Villa Dolores', industry: 'Servicios' } })
+  expect(response.ok()).toBeTruthy()
+  await page.goto('/#map')
+  await page.getByLabel('Buscar empresas').fill('Punto exacto ficticio QA')
+  await page.getByRole('button', { name: 'Aplicar filtros' }).click()
+  await expect(page.getByRole('button', { name: 'Punto exacto ficticio QA' })).toBeVisible()
+  const frame = page.locator('.street-frame')
+  await expect(frame).toHaveAttribute('data-layer', 'streets')
+  await expect(frame.locator('.leaflet-tile-loaded').first()).toBeVisible()
+  const before = Number(await frame.getAttribute('data-zoom'))
+  await page.getByRole('button', { name: 'Acercar mapa' }).click()
+  await expect(frame).toHaveAttribute('data-zoom', String(before + 1))
+  await page.getByRole('button', { name: 'Punto exacto ficticio QA' }).click()
+  await page.getByText('Confirmar ubicación exacta', { exact: true }).click()
+  await page.getByLabel('Latitud', { exact: true }).fill('-31.945')
+  await page.getByLabel('Longitud', { exact: true }).fill('-65.19')
+  await page.getByLabel('Fuente pública HTTPS').fill('https://example.org/referencia-cartografica')
+  await page.getByLabel('Confirmé que la ubicación corresponde a esta empresa.').check()
+  await page.getByRole('button', { name: 'Guardar ubicación' }).click()
+  await expect(page.getByText(/Ubicación exacta/).first()).toBeVisible()
+  await expect(frame.locator('.street-pin.exact')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Contorno' }).click()
+  await expect(frame).toHaveAttribute('data-layer', 'outline')
+  await expect(frame.locator('.street-pin.exact')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Retirar ubicación exacta' }).click()
+  await expect(frame.locator('.street-pin.approximate')).toHaveCount(1)
+  const tileRequests = /^https:\/\/tile\.openstreetmap\.org\//
+  await page.unroute(tileRequests)
+  await page.route(tileRequests, (route) => route.abort('failed'))
+  await page.getByRole('button', { name: 'Calles' }).click()
+  await expect(page.getByText('Fondo de calles no disponible. El contorno y los puntos siguen visibles.')).toBeVisible()
+  await expect(frame.locator('.street-pin.approximate')).toHaveCount(1)
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  expect(pageErrors).toEqual([])
+})
+
+test('la cola abre la candidata y su mapa con teclado, y enfoca el borrador exacto', async ({ page }) => {
+  const token = await page.evaluate(() => sessionStorage.getItem('reac-operator-session'))
+  const headers = { Authorization: 'Bearer ' + token }
+  const sample = JSON.parse(readFileSync(resolve('fixtures/investigacion-demo.json'), 'utf8')).records[0]
+  const name = 'Comercio de revisión QA'
+  const record = { ...sample, name, website: 'https://revision.example/', email: 'ventas@revision.example',
+    phone: '', confidence: 'ALTA', evidence: { ...sample.evidence, url: 'https://revision.example/tienda', consultedAt: new Date().toISOString().slice(0, 10) } }
+  for (const mode of ['discover', 'update']) {
+    const response = await page.request.post('/api/v1/research/jobs', { headers, data: {
+      requestId: randomUUID(), file: { version: 1, records: [record] }, verifiedSources: true, mode, filters: { quantity: 1 },
+    } })
+    expect(response.status()).toBe(202)
+    const { id } = await response.json()
+    await expect.poll(async () => (await (await page.request.get('/api/v1/research/jobs/' + id, { headers })).json()).job[mode === 'discover' ? 'imported' : 'pending']).toBe(1)
+  }
+  await page.reload()
+  await page.getByRole('link', { name: 'Revisar ' + name, exact: true }).press('Enter')
+  await expect(page.locator('.v4-review-items > li')).toHaveCount(1)
+  await expect(page.getByRole('combobox', { name: 'Decisión' })).toBeVisible()
+  await page.getByRole('link', { name: 'Ubicar en el mapa' }).press('Enter')
+  await expect(page.getByRole('heading', { name, exact: true })).toBeFocused()
+  await expect(page.locator('.commercial-map-detail')).toContainText('Localidad aproximada')
+  await expect.poll(async () => Number(await page.locator('.street-frame').getAttribute('data-zoom'))).toBeGreaterThanOrEqual(11)
+  await expect(page.getByRole('button', { name: 'Más filtros' })).toHaveAttribute('aria-expanded', 'false')
+  await page.getByRole('button', { name: 'Más filtros' }).press('Space')
+  await expect(page.getByRole('combobox', { name: 'Rubro' })).toBeVisible()
+  await page.getByRole('link', { name: 'Dashboard', exact: true }).press('Enter')
+  await page.getByRole('link', { name: 'Revisar borrador de ' + name }).press('Enter')
+  await expect(page.locator('.records li[tabindex="-1"]')).toBeFocused()
 })

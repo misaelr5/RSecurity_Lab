@@ -5,18 +5,18 @@ import { researchStatus } from './research-fields.tsx'
 import { Empty, Feedback, Field, Resource, useAction, useResource, values } from './widgets.tsx'
 
 const categories = {
-  all: 'Todas', verified: 'Verificadas automáticamente', pending: 'Pendientes de verificación', duplicate: 'Posibles duplicados',
+  all: 'Todas', verified: 'Verificadas y resueltas', pending: 'Pendientes de verificación', duplicate: 'Posibles duplicados',
   incomplete: 'Información incompleta', excluded: 'Excluidas y rechazadas', error: 'Errores de proveedor',
 } as const
 type Category = keyof typeof categories
 type CandidateRecord = { name: string; city: string; region?: string; website?: string; industry?: string; email?: string; phone?: string; confidence?: string;
   evidence?: { url?: string; consultedAt?: string; statement?: string } }
 type Candidate = { id: string; jobId: string; record: CandidateRecord; outcome: string; reason: string; missing: string[]; category: Category;
-  organizationId?: string; reviewer?: string; reviewedAt?: string; matches?: { id: string; name: string; city?: string }[] }
+  organizationId?: string; reviewer?: string; reviewedAt?: string; contentVersion: string; matches?: { id: string; name: string; city?: string }[] }
 type ProviderError = { id?: string; jobId?: string; provider?: string; reason?: string; state?: string; createdAt?: string }
-type Decision = { id: string; action: 'approve' | 'reject' | 'exclude' | 'link' | 'edit' | 'enrich'; organizationId?: string; record?: CandidateRecord; reason?: string }
-type Queue = { candidates: Candidate[]; errors: ProviderError[] }
-const actionable = (item: Candidate) => ['pending', 'duplicate', 'incomplete'].includes(item.category)
+type Decision = { id: string; contentVersion: string; action: 'approve' | 'reject' | 'exclude' | 'link' | 'edit' | 'enrich'; organizationId?: string; record?: CandidateRecord; reason?: string }
+type Queue = { candidates: Candidate[]; errors: ProviderError[]; total: number; page: number }
+const actionable = (item: Candidate) => ['EN_REVISION', 'ACTUALIZAR'].includes(item.outcome)
 const labels: Record<string, string> = { name: 'Nombre', city: 'Localidad', region: 'Región', website: 'Web', industry: 'Rubro', email: 'Correo', phone: 'Teléfono', evidence: 'Fuente' }
 const reviewUrl = '/research/review'
 
@@ -26,10 +26,12 @@ function externalLink(url?: string) {
   catch { return undefined }
 }
 
-export function ResearchReview({ revision, refresh }: { revision: number; refresh: () => void }) {
+export function ResearchReview({ revision, refresh, candidateId }: { revision: number; refresh: () => void; candidateId?: string }) {
   const [category, setCategory] = useState<Category>('all')
-  const [selected, setSelected] = useState<string[]>([])
-  const result = useResource<Queue>(reviewUrl + '?category=' + category, revision)
+  const [page, setPage] = useState(1)
+  const [selected, setSelected] = useState<Pick<Candidate, 'id' | 'contentVersion'>[]>([])
+  const query = candidateId ? new URLSearchParams({ candidateId }) : new URLSearchParams({ category, page: String(page) })
+  const result = useResource<Queue>(reviewUrl + '?' + query, revision)
   const action = useAction(refresh)
   function decide(decisions: Decision[], reviewer: string, after?: () => void) {
     void action.run(async () => {
@@ -39,14 +41,14 @@ export function ResearchReview({ revision, refresh }: { revision: number; refres
   }
   return <section className="panel">
     <div className="v4-section-heading"><div><h2>Bandeja de revisión</h2><p className="muted">Revisá la fuente y la identidad antes de decidir.</p></div>
-      <label className="field">Clasificación<select value={category} onChange={(event) => { setCategory(event.target.value as Category); setSelected([]) }}>
+      {candidateId ? <a href="#review">Ver toda la bandeja</a> : <label className="field">Clasificación<select value={category} onChange={(event) => { setCategory(event.target.value as Category); setSelected([]); setPage(1) }}>
         {Object.entries(categories).map(([key, text]) => <option key={key} value={key}>{text}</option>)}
-      </select></label></div>
+      </select></label>}</div>
     <Feedback state={action} />
-    <Resource result={result}>{({ candidates, errors }) => <>
+    <Resource result={result}>{({ candidates, errors, total }) => <>
       {!!selected.length && <form className="fields v4-fields v4-batch inset" onSubmit={(event) => {
         const data = values(event)
-        decide(selected.map((id) => ({ id, action: 'reject', reason: data.reason })), data.reviewer, () => setSelected([]))
+        decide(selected.map((item) => ({ ...item, action: 'reject', reason: data.reason })), data.reviewer, () => setSelected([]))
       }}>
         <strong className="wide">{selected.length} seleccionadas</strong>
         <Field label="Responsable de la revisión conjunta" name="reviewer" required />
@@ -57,13 +59,16 @@ export function ResearchReview({ revision, refresh }: { revision: number; refres
       {candidates.length ? <ul className="records v4-review-items">{candidates.map((item) => <li key={item.id}>
         <CandidateDetails item={item} />
         {actionable(item) && <>
-          <label className="check inset"><input type="checkbox" checked={selected.includes(item.id)} disabled={selected.length >= 25 && !selected.includes(item.id)}
-            onChange={(event) => setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} />Seleccionar {item.record.name || 'candidata'} para rechazo conjunto</label>
-          <details><summary>Revisar candidata</summary>
-            <DecisionForm item={item} busy={action.busy} revision={revision} decide={(decision, reviewer) => decide([decision], reviewer, () => setSelected((ids) => ids.filter((id) => id !== item.id)))} />
+          {!candidateId && <label className="check inset"><input type="checkbox" checked={selected.some(({ id }) => id === item.id)} disabled={selected.length >= 25 && !selected.some(({ id }) => id === item.id)}
+            onChange={(event) => setSelected(event.target.checked ? [...selected, { id: item.id, contentVersion: item.contentVersion }] : selected.filter(({ id }) => id !== item.id))} />Seleccionar {item.record.name || 'candidata'} para rechazo conjunto</label>}
+          <details open={candidateId ? true : undefined}><summary>Revisar candidata</summary>
+            <DecisionForm item={item} busy={action.busy} revision={revision} decide={(decision, reviewer) => decide([decision], reviewer, () => setSelected((items) => items.filter(({ id }) => id !== item.id)))} />
           </details>
         </>}
       </li>)}</ul> : !errors.length && <Empty>No hay candidatas con esta clasificación.</Empty>}
+      {total > 100 && <div className="toolbar inset"><button disabled={page <= 1} onClick={() => { setPage(page - 1); setSelected([]) }}>Anterior</button>
+        <span>{total} candidatas · página {page} de {Math.ceil(total / 100)}</span>
+        <button disabled={page * 100 >= total} onClick={() => { setPage(page + 1); setSelected([]) }}>Siguiente</button></div>}
       {!!errors.length && <section className="inset"><h3>Errores registrados</h3><ul className="records">{errors.map((error, idx) => <li key={error.id ?? error.jobId ?? idx}>
         <strong>{error.provider || 'Proveedor de investigación'}</strong>
         <p>{error.reason || 'La ejecución requiere revisión.'}</p>
@@ -80,7 +85,8 @@ function CandidateDetails({ item }: { item: Candidate }) {
   return <>
     <div className="v4-section-heading"><div><h3>{record.name || 'Empresa sin nombre confirmado'}</h3><small>
       {[record.city, record.region && record.region !== record.city ? record.region : '', record.confidence ? 'Confianza ' + record.confidence.toLowerCase() : '', record.evidence?.consultedAt].filter(Boolean).join(' · ')}
-    </small></div><span className="tag">{item.outcome === 'ACTUALIZAR' ? 'Actualización propuesta' : researchStatus(item.outcome)}</span></div>
+    </small></div><span className="tag">{item.outcome === 'ACTUALIZAR' ? 'Actualización propuesta'
+      : item.outcome === 'IMPORTADO' && !item.reviewedAt ? 'Verificada automáticamente' : researchStatus(item.outcome)}</span></div>
     <p>{item.reason}</p>{record.evidence?.statement && <p className="muted">{record.evidence.statement}</p>}
     {!!item.missing?.length && <small>Datos faltantes · {item.missing.map((field) => labels[field] ?? field).join(', ')}</small>}
     {item.reviewedAt && <small>Revisó {item.reviewer || 'el operador'} · {when(item.reviewedAt)}</small>}
@@ -89,6 +95,7 @@ function CandidateDetails({ item }: { item: Candidate }) {
       {source && <a href={source} target="_blank" rel="noopener noreferrer">Ver fuente</a>}
       <a href={'#research/' + item.jobId}>Ver lote</a>
       {item.organizationId && <a href={'#prospect/' + item.organizationId}>Abrir ficha</a>}
+      {item.organizationId && <a href={'#map/prospect/' + item.organizationId}>Ubicar en el mapa</a>}
       {item.organizationId && <a href={'#enrichment/' + item.organizationId}>Solicitar enriquecimiento</a>}
     </div>
   </>
@@ -100,8 +107,9 @@ function DecisionForm({ item, busy, revision, decide }: { item: Candidate; busy:
   return <form className="fields v4-fields" onSubmit={(event) => {
     const data = values(event)
     const record = decision === 'edit' ? { ...item.record, name: data.name, city: data.city, region: data.region, industry: data.industry,
-      website: data.website, email: data.email, phone: data.phone } : undefined
-    decide({ id: item.id, action: decision, organizationId: data.organizationId || undefined, record, reason: data.reason || undefined }, data.reviewer)
+      website: data.website, email: data.email, phone: data.phone, evidence: { ...item.record.evidence, url: data.sourceUrl,
+        consultedAt: data.consultedAt, statement: data.statement } } : undefined
+    decide({ id: item.id, contentVersion: item.contentVersion, action: decision, organizationId: data.organizationId || undefined, record, reason: data.reason || undefined }, data.reviewer)
   }}>
     <label className="field">Decisión<select value={decision} onChange={(event) => setDecision(event.target.value as Decision['action'])}>
       {item.outcome === 'ACTUALIZAR' ? <option value="enrich">Preparar actualización para revisar</option>
@@ -114,8 +122,12 @@ function DecisionForm({ item, busy, revision, decide }: { item: Candidate; busy:
       <label className="field">Buscar ficha para vincular<input value={company} maxLength={120} onChange={(event) => setCompany(event.target.value)} /></label>
       <CompanyOptions item={item} query={company} revision={revision} />
     </>}
-    {decision === 'edit' && (['name', 'city', 'region', 'industry', 'website', 'email', 'phone'] as const).map((field) =>
+    {decision === 'edit' && <>{(['name', 'city', 'region', 'industry', 'website', 'email', 'phone'] as const).map((field) =>
       <Field key={field} label={labels[field]} name={field} value={item.record[field]} />)}
+      <Field label="URL de la fuente" name="sourceUrl" type="url" value={item.record.evidence?.url} required />
+      <Field label="Fecha de consulta" name="consultedAt" type="date" value={item.record.evidence?.consultedAt} required />
+      <Field label="Dato publicado" name="statement" value={item.record.evidence?.statement} area required />
+    </>}
     <Field label="Motivo" name="reason" area required={decision === 'reject' || decision === 'exclude'} />
     <label className="check wide"><input type="checkbox" required />Confirmo la decisión y revisé la fuente cuando corresponde.</label>
     <div className="wide"><button disabled={busy}>Registrar decisión</button></div>

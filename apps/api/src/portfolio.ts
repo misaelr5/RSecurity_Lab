@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { prospect, source, observation, manualSource, csvSource, review, versionedReview, message, id, z, readCrm, optedOut, normalize, organizationKey, statuses, regions, crmHeaders, unwrapCrmCell, discoveryFile, applicationTypes } from '@reac/core'
+import { prospect, source, observation, manualSource, csvSource, review, versionedReview, message, id, z, readCrm, optedOut, normalize, organizationKey, statuses, regions, crmHeaders, unwrapCrmCell, discoveryFile, applicationTypes, redact } from '@reac/core'
 import type { Prospect, Source, Observation, Message, CrmRow, AuthorizationRecord } from '@reac/core'
 import { crmCsv } from '@reac/reporting'
 import type { FastifyInstance } from 'fastify'
@@ -8,6 +8,8 @@ import { problem, parse, must, attach } from './http.ts'
 import { authorizationState } from './audits.ts'
 import { rememberIdentity } from './prospect-identity.ts'
 import type { IdentityHistory } from './prospect-identity.ts'
+import { batchCompletedAction, describeBatch } from './research-activity.ts'
+import type { BatchActivity, DashboardJob } from './research-activity.ts'
 
 type StoredProspect = Prospect & IdentityHistory & { original?: CrmRow; origin: string; campaignId?: string; responsible?: string; confidence?: string; archivedAt?: string; archiveReason?: string }
 const portable = z.strictObject({
@@ -58,14 +60,25 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
 
   app.get('/api/dashboard', () => {
     const orgs = store.list<StoredProspect>('organizations')
+    const activeOrgs = new Map(orgs.filter((org) => !org.archivedAt && !optedOut(org) && org.status !== 'Perdido').map((org) => [org.id, org.name]))
+    const pendingDrafts = store.list<Draft>('outreach_drafts').filter((draft) => !draft.reviewedAt && draft.parent && activeOrgs.has(draft.parent))
+    const first = pendingDrafts[0]
+    const activity = store.list<{ action: string; entity?: string; batch?: BatchActivity }>('activity_log').slice(0, 8).map((event) => {
+      if (event.action !== batchCompletedAction || !event.entity) return event
+      if (event.batch) return { ...event, batch: { ...event.batch, asOfCompletion: true } }
+      const job = store.find<DashboardJob>('research_jobs', event.entity)
+      const batch = job && describeBatch(job)
+      return batch ? { ...event, batch: { ...batch, asOfCompletion: false } } : event
+    })
     return {
       total: orgs.length,
       regions: orgs.reduce<Record<string, number>>((counts, item) => ({ ...counts, [item.region]: (counts[item.region] ?? 0) + 1 }), {}),
       verified: store.list<Note>('observations').filter((item) => item.reviewedAt && item.level === 'OBSERVACION_PUBLICA').length,
-      pending: store.list<Draft>('outreach_drafts').filter((item) => !item.reviewedAt).length,
+      pending: pendingDrafts.length,
+      firstPendingDraft: first?.parent ? { draftId: first.id, organizationId: first.parent, name: activeOrgs.get(first.parent) } : null,
       authorized: store.list<AuthorizationRecord>('authorizations').filter((item) => authorizationState(item) === 'APPROVED' && Date.parse(item.startsAt) <= Date.now()).length,
       lab: store.list<{ mode: string; status: string }>('audit_runs').filter((item) => item.mode === 'LAB_LOCAL' && item.status === 'COMPLETED').length,
-      activity: store.list('activity_log').slice(0, 8),
+      activity,
     }
   })
   app.get('/api/prospect-regions', () => [...new Set([...regions, ...store.list<StoredProspect>('organizations').map((item) => item.region)])])
@@ -104,6 +117,10 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
   }))
   function addDiscovery(item: z.output<typeof discoveryFile>['records'][number], reviewer: string, campaignId?: string) {
       const { evidence, corroboration, opportunity, technologies, confidence, ...candidate } = item
+      const day = new Date().toISOString().slice(0, 10)
+      if (evidence.consultedAt > day || (corroboration && corroboration.consultedAt > day)) {
+        throw problem(400, 'La fecha de consulta de una fuente no puede ser futura.')
+      }
       const { org, engagement } = create(prospect.parse({ ...candidate, verifiedAt: evidence.consultedAt, status: 'Verificar' }))
       store.update('organizations', org.id, { ...org, sourceUrl: evidence.url, origin: campaignId ? 'INVESTIGACION_V3' : 'DESCUBRIMIENTO_MANUAL_V1', campaignId, responsible: reviewer, confidence })
       const primary = store.insert('public_sources', manualSource.capture(evidence), org.id)
@@ -235,7 +252,7 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     return attach(reply, 'reac-prospectos-v1.json', 'application/json; charset=utf-8', body)
   })
   function handoff(item: StoredProspect & { id: string }) {
-    const blocked = optedOut(item)
+    const blocked = optedOut(item) || Boolean(item.archivedAt) || item.status === 'Perdido'
     const approved = !blocked && store.list<Draft>('outreach_drafts', item.id).find((draft) => draft.reviewedAt)
     return { id: item.id, name: item.name, blocked, crmIndustry: crmIndustries.includes(item.industry) ? item.industry : 'Otro', approved: Boolean(approved), message: approved ? approved.body : '' }
   }
@@ -243,16 +260,29 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     const { id, name, blocked, crmIndustry, approved } = handoff(item)
     return { id, name, blocked, industry: item.industry, crmIndustry, approved }
   }))
-  function crmExport(transferApproved: boolean, selection?: ReadonlySet<string>) {
+  function crmExport(transferApproved: boolean, selection?: ReadonlySet<string>, publicOnly = false) {
     const rows = store.list<StoredProspect>('organizations').filter((item) => !selection || selection.has(item.id)).map((item) => {
       const transfer = transferApproved ? handoff(item) : undefined
+      const publicUrl = (value: string) => {
+        if (!value) return ''
+        const parsed = new URL(value)
+        return parsed.origin + parsed.pathname
+      }
+      if (publicOnly) {
+        const publishChannel = item.contactPurpose === 'Comercial' && Boolean(item.sourceUrl && item.verifiedAt) && !transfer?.blocked
+        return { empresa: redact(item.name), rubro: transfer?.crmIndustry ?? redact(item.industry), ciudad: redact(item.city), web: publicUrl(item.website),
+          email: publishChannel ? item.email : '', telefono: publishChannel ? item.phone : '', fuente_url: publicUrl(item.sourceUrl), fecha_verificacion: item.verifiedAt,
+          estado: optedOut(item) ? 'No contactar' : item.archivedAt ? 'Perdido' : item.status, consentimiento: optedOut(item) ? 'Excluido' : item.consent,
+          proximo_seguimiento: transfer?.blocked ? '' : item.nextFollowUp }
+      }
       return ({
       presencia_web: 'Sin verificar', prioridad: 'Media', servicio: 'A definir', ...Object.fromEntries(Object.entries(item.original ?? {}).map(([key, value]) => [key, unwrapCrmCell(value)])),
       empresa: item.name, rubro: transfer?.crmIndustry ?? item.industry, ciudad: item.city, web: item.website,
       email: item.email, telefono: item.phone, fuente_url: item.sourceUrl, fecha_verificacion: item.verifiedAt,
       estado: item.status, notas: item.notes, consentimiento: item.consent, proximo_seguimiento: item.nextFollowUp,
-      mensaje: transfer ? transfer.message : optedOut(item) ? '' : unwrapCrmCell(item.original?.mensaje ?? ''),
-      ...(transfer?.blocked ? { estado: 'No contactar', consentimiento: 'Excluido' } : {}),
+      mensaje: transfer ? transfer.message : optedOut(item) || item.archivedAt ? '' : unwrapCrmCell(item.original?.mensaje ?? ''),
+      ...(transfer?.blocked && optedOut(item) ? { estado: 'No contactar', consentimiento: 'Excluido' } : {}),
+      ...(transfer?.blocked && !optedOut(item) && item.archivedAt ? { estado: 'Perdido' } : {}),
     })
     })
     return crmCsv(rows)

@@ -29,7 +29,7 @@ test('historial comercial, métricas explícitas y exportaciones con filtros', a
   const engagement = store.insert('engagements', {}, hotel.id)
   const contact = store.insert('pipeline_events', { stage: 'Contactado', note: 'Llamada registrada' }, engagement.id)
   store.insert('pipeline_events', { stage: 'Respondió', note: 'Respuesta recibida' }, engagement.id)
-  const source = store.insert('public_sources', { url: hotel.sourceUrl }, hotel.id)
+  const source = store.insert('public_sources', { url: hotel.sourceUrl, consultedAt: '2026-11-01' }, hotel.id)
   const observation = store.insert('observations', { level: 'OBSERVACION_PUBLICA', reviewedAt: '2026-11-01' }, source.id)
   store.log('Observación revisada', observation.id)
   store.insert('outreach_drafts', { subject: 'Aprobado', body: 'Texto aprobado', reviewedAt: '2026-11-01' }, hotel.id)

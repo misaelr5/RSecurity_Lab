@@ -9,7 +9,7 @@ Prepará una propuesta desde Orca o ingresala manualmente en una ficha existente
 3. Creá la propuesta. La vista muestra el valor actual, el propuesto y si el campo está habilitado para incorporar. Cuando la propuesta viene de un candidato de investigación, conserva referencias al lote y al candidato.
 4. Marcá los campos que cotejaste y confirmá con el nombre del operador. También podés rechazar la propuesta y conservar su historial. Si cambió la ficha o la validez de la evidencia, volvé a cargar la comparación.
 
-Los contactos que ya tienen valor se preservan. Para otros campos completos, un valor diferente requiere una fuente más reciente que la verificación registrada. Se admiten campos faltantes con evidencia de hasta 180 días. La exclusión vigente bloquea la creación y aplicación, incluso si se registró después de preparar la propuesta.
+Los contactos que ya tienen valor se preservan. Para otros campos completos, un valor diferente requiere una fuente más reciente que la verificación registrada. Se admiten campos faltantes con evidencia de hasta 180 días. La exclusión, el descarte o el archivo de la ficha bloquean la creación y aplicación, incluso si se registraron después de preparar la propuesta.
 
 ## Estructura y control
 

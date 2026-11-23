@@ -10,6 +10,8 @@ import type { ResearchCatalog } from './research.ts'
 import { registerCommercialMap } from './commercial-map.ts'
 import { registerCommercialRegister } from './commercial-register.ts'
 import { registerHistory } from './history.ts'
+import { addCampaignMember, registerCampaigns, requireOpenCampaign } from './campaigns.ts'
+import { proposeResearchEnrichment, registerEnrichment } from './enrichment.ts'
 import type { AIProvider } from './ai-provider.ts'
 import { registerPipeline } from './pipeline.ts'
 import { registerPublicAssets } from './public-assets.ts'
@@ -27,6 +29,8 @@ const tools = ['Subfinder', 'WappalyzerGo', 'MDN HTTP Observatory', 'HTTPx', 'Nu
 
 export function createApp(options: Options) {
   const store = openStore(options.database)
+  let releaseRuntime: () => void
+  try { releaseRuntime = store.acquireRuntime() } catch (error) { store.db.close(); throw error }
   const app = Fastify({
     logger: options.logger ?? false, logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 1024 * 1024, requestTimeout: 5000, connectionTimeout: 10000,
@@ -34,11 +38,11 @@ export function createApp(options: Options) {
   })
   const localHost = '127.0.0.1:' + options.port
   const origin = 'http://' + localHost
-  app.addHook('onClose', async () => { store.db.close() })
+  app.addHook('onClose', async () => { try { releaseRuntime() } finally { store.db.close() } })
   app.addHook('onRequest', async (request, reply) => {
     reply.headers({
       'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
-      'Content-Security-Policy': "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; form-action 'self'",
+      'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; form-action 'self'",
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
       'Cache-Control': 'no-store',
     })
@@ -46,7 +50,7 @@ export function createApp(options: Options) {
       (request.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(request.headers['sec-fetch-site']))) {
       return reply.code(403).send({ message: 'Esta aplicación solo admite su origen local.' })
     }
-    if (['POST', 'PUT', 'DELETE'].includes(request.method) && !/^application\/json(?:;|$)/i.test(request.headers['content-type'] ?? '')) {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method) && !/^application\/json(?:;|$)/i.test(request.headers['content-type'] ?? '')) {
       return reply.code(415).send({ message: 'Usá Content-Type application/json.' })
     }
   })
@@ -63,10 +67,16 @@ export function createApp(options: Options) {
   const audits = registerAudits(app, store, options.fixturePort)
   const assets = registerPublicAssets(app, store)
   registerPipeline(app, store)
-  registerResearch(app, store, portfolio, options.aiProvider, options.researchCatalog)
+  registerResearch(app, store, portfolio, options.aiProvider, options.researchCatalog, {
+    requireCampaign: (id) => { requireOpenCampaign(store, id) },
+    addMember: (id, organizationId, jobId) => { addCampaignMember(store, id, organizationId, 'INVESTIGACION', jobId) },
+    proposeEnrichment: (organizationId, record, reference) => proposeResearchEnrichment(store, organizationId, record, reference),
+  })
   registerCommercialMap(app, store)
   registerCommercialRegister(app, store, portfolio)
   registerHistory(app, store, portfolio)
+  registerCampaigns(app, store)
+  registerEnrichment(app, store)
   registerDefensiveReviews(app, store)
   registerReports(app, store, portfolio, audits, assets)
   app.get('/api/health', () => {
@@ -96,7 +106,7 @@ export function createApp(options: Options) {
     const dates = options.backupDir ? await Promise.all(files.filter((entry) => entry.isFile() && backupName.test(entry.name))
       .map(async (entry) => (await lstat(resolve(options.backupDir!, entry.name))).mtime.toISOString().slice(0, 10))) : []
     return { prospectiveReviewDays: 180, backupReviewDays: 90, unverified: records.filter((entry) => !entry.verifiedAt).length,
-      prospectReviewDue: records.filter((entry) => entry.verifiedAt && age(entry.verifiedAt) >= 180).length,
+      prospectReviewDue: records.filter((entry) => entry.verifiedAt && (age(entry.verifiedAt) < 0 || age(entry.verifiedAt) >= 180)).length,
       backupReviewDue: dates.filter((date) => age(date) >= 90).length }
   })
   app.post('/api/backups', async (request, reply) => {

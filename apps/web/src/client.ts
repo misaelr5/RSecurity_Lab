@@ -12,7 +12,11 @@ export type Asset = Entity<PublicAsset>
 export type Pipeline = { stage: PipelineEvent['stage']; events: Entity<PipelineEvent>[] }
 export type PipelineMetrics = { stages: { stage: string; count: number }[]; contactados: number; respondieron: number }
 export type Detail = { org: Organization; duplicates: { id: string; name: string; matches: string[] }[]; sources: PublicSource[]; observations: Entity<Observation & Reviewed>[]; drafts: Entity<Message & Reviewed & { contentVersion: string; channel?: 'Email' | 'WhatsApp' }>[] }
-export type Dashboard = { total: number; regions: Record<string, number>; verified: number; pending: number; authorized: number; lab: number; activity: Entity<{ action: string }>[] }
+export type Dashboard = {
+  total: number; regions: Record<string, number>; verified: number; pending: number; authorized: number; lab: number
+  firstPendingDraft: { organizationId: string; draftId: string; name: string } | null
+  activity: Entity<{ action: string; entity?: string; batch?: { name: string; imported: number; duplicates: number; asOfCompletion: boolean } }>[]
+}
 export type Page = { items: Organization[]; total: number; page: number }
 export type Audit = Entity<Run>
 export type Authorization = Entity<AuthorizationRecord & { effectiveState: string; contentVersion: string }>

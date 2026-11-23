@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { statuses } from '../../../packages/core/src/constants.ts'
-import { DownloadButton, Empty, Resource, useResource, values } from './widgets.tsx'
+import { DownloadButton, Empty, Feedback, Resource, useAction, useResource, values } from './widgets.tsx'
+import { api, today, when } from './client.ts'
+import { StreetMap } from './street-map.tsx'
+import type { MapLocation } from './street-map.tsx'
 import './commercial-map.css'
 
-type Location = { longitude: number; latitude: number; precision: 'LOCALIDAD_APROXIMADA'; sourceUrl: string }
 type Marker = {
   id: string
   name: string
@@ -13,13 +15,18 @@ type Marker = {
   campaignId: string | null
   website: string
   nextFollowUp: string
-  location: Location | null
+  lastContact?: string
+  archived?: boolean
+  location: MapLocation | null
 }
 type MapView = {
   items: Marker[]
   cities: string[]
+  regions?: string[]
   industries: string[]
   campaigns: string[]
+  commercialCampaigns?: { id: string; name: string }[]
+  coverage?: { city: string; registered: number; contacted: number; pending: number; campaigns: number }[]
   cartography: { source: string; url: string; license: string; modified: boolean; outline: [number, number][] }
   attribution: string
 }
@@ -33,10 +40,6 @@ const categories = {
   mixed: 'Estados combinados',
 } as const
 type Category = keyof typeof categories
-const width = 800
-const height = 540
-type Point = [number, number]
-type Group = { x: number; y: number; markers: Marker[] }
 
 function category(status: string): Category {
   if (status === 'Ganado') return 'won'
@@ -46,123 +49,101 @@ function category(status: string): Category {
   return 'initial'
 }
 
-function projection(frame: Point[]) {
-  const west = Math.min(...frame.map(([lon]) => lon))
-  const east = Math.max(...frame.map(([lon]) => lon))
-  const south = Math.min(...frame.map(([, lat]) => lat))
-  const north = Math.max(...frame.map(([, lat]) => lat))
-  const centerLon = (west + east) / 2
-  const centerLat = (south + north) / 2
-  const longitudeRatio = Math.cos(centerLat * Math.PI / 180)
-  const spanLon = Math.max(east - west, 0.18) * longitudeRatio
-  const spanLat = Math.max(north - south, 0.14)
-  const scale = Math.min((width - 130) / spanLon, (height - 110) / spanLat)
-  return ([lon, lat]: Point): Point => [
-    width / 2 + (lon - centerLon) * longitudeRatio * scale,
-    height / 2 + (centerLat - lat) * scale,
-  ]
+type MapProps = { revision: number; refresh: () => void; campaignId?: string; prospectId?: string }
+
+export function CommercialMap(props: MapProps) {
+  return <MapWorkspace key={JSON.stringify([props.campaignId, props.prospectId])} {...props} />
 }
 
-function groupMarkers(items: Marker[], project: (point: Point) => Point) {
-  const groups: Group[] = []
-  for (const item of items) {
-    if (!item.location) continue
-    const [x, y] = project([item.location.longitude, item.location.latitude])
-    const nearby = groups.find((group) => Math.hypot(group.x - x, group.y - y) <= 28)
-    if (nearby) nearby.markers.push(item)
-    else groups.push({ x, y, markers: [item] })
-  }
-  return groups
-}
-
-export function CommercialMap({ revision }: { revision: number }) {
-  const [query, setQuery] = useState('')
-  const [selection, setSelection] = useState<string>()
-  const [extent, setExtent] = useState<'visible' | 'province'>('visible')
+function MapWorkspace({ revision, refresh, campaignId, prospectId }: MapProps) {
+  const [query, setQuery] = useState(campaignId ? new URLSearchParams({ campaign: campaignId }).toString() : '')
+  const [advanced, setAdvanced] = useState(Boolean(campaignId))
+  const [selection, setSelection] = useState<string[]>(prospectId ? [prospectId] : [])
+  const panelHeading = useRef<HTMLHeadingElement>(null)
+  const returnTo = useRef<string | null>(null)
   const result = useResource<MapView>('/map/prospects' + (query ? '?' + query : ''), revision)
+  const ready = Boolean(result.value)
+  const viewport = useMemo(() => result.value ? {
+    items: result.value.items.map((item) => ({ ...item, category: item.archived ? 'closed' : category(item.status) })),
+    outline: result.value.cartography.outline,
+  } : undefined, [result.value])
+  useEffect(() => {
+    if (selection.length && panelHeading.current) panelHeading.current.focus()
+    else if (returnTo.current) {
+      document.getElementById('map-result-' + returnTo.current)?.focus()
+      returnTo.current = null
+    }
+  }, [selection, ready])
   return <Resource result={result}>{(data) => {
-    const positions: Point[] = data.items.flatMap((item) => item.location ? [[item.location.longitude, item.location.latitude] as Point] : [])
-    const project = projection(extent === 'province' || !positions.length ? data.cartography.outline : positions)
-    const outlinePath = data.cartography.outline.map((point, index) => (index ? 'L' : 'M') + project(point).join(' ')).join(' ') + ' Z'
-    const groups = groupMarkers(data.items, project)
-    const selected = groups.find((group) => group.markers.some((item) => item.id === selection))
-    const listed = selected ? selected.markers : data.items
-    return <section className="panel commercial-map" aria-label="Mapa de prospectos">
+    const positioned = data.items.filter((item) => item.location).length
+    const selected = data.items.filter((item) => selection.includes(item.id))
+    const listed = selected.length ? selected : data.items
+    const exact = data.items.filter((item) => item.location?.precision === 'EXACTA').length
+    const applied = new URLSearchParams(query)
+    const extraCount = ['region', 'industry', 'campaign', 'status'].filter((key) => applied.has(key)).length
+    const detail = selected.length === 1 ? selected[0] : undefined
+    return <section className="commercial-map" aria-label="Mapa de prospectos">
       <form className="commercial-map-filters" onSubmit={(event) => {
         const fields = values(event)
-        setSelection(undefined)
+        setSelection([])
         setQuery(new URLSearchParams(Object.entries(fields).filter(([, value]) => value.trim())).toString())
       }}>
         <label className="field">Buscar empresas<input name="q" maxLength={120} defaultValue={new URLSearchParams(query).get('q') ?? ''} /></label>
         <MapFilter name="city" label="Localidad" options={data.cities.map(option)} query={query} />
-        <MapFilter name="industry" label="Rubro" options={data.industries.map(option)} query={query} />
-        <MapFilter name="campaign" label="Campaña" options={[{ value: 'none', label: 'Sin campaña' }, ...data.campaigns.map((id) => ({
-          value: id, label: 'Lote ' + id.slice(0, 8),
-        }))]} query={query} />
-        <MapFilter name="status" label="Estado" options={statuses.map(option)} query={query} />
-        <div className="commercial-map-actions"><button className="primary">Aplicar filtros</button></div>
-      </form>
-      <div className="commercial-map-toolbar">
-        <p role="status">{positions.length} con ubicación aproximada · {data.items.length - positions.length} sin coordenadas</p>
-        <div>
-          <button aria-pressed={extent === 'visible'} onClick={() => setExtent('visible')}>Ajustar a resultados</button>
-          <button aria-pressed={extent === 'province'} onClick={() => setExtent('province')}>Ver provincia</button>
+        <button type="button" aria-expanded={advanced} aria-controls="map-extra-filters" onClick={() => setAdvanced(!advanced)}>
+          Más filtros{extraCount ? ' (' + extraCount + ')' : ''} <span aria-hidden="true">{advanced ? '−' : '+'}</span>
+        </button>
+        <div id="map-extra-filters" className="commercial-map-extra" hidden={!advanced}>
+          <MapFilter name="region" label="Región" options={(data.regions ?? []).map(option)} query={query} />
+          <MapFilter name="industry" label="Rubro" options={data.industries.map(option)} query={query} />
+          <MapFilter name="campaign" label="Campaña" options={[{ value: 'none', label: 'Sin campaña' }, ...(data.commercialCampaigns ?? []).map(({ id, name }) => ({ value: id, label: name })), ...data.campaigns.map((id) => ({
+            value: id, label: 'Lote ' + id.slice(0, 8),
+          }))]} query={query} />
+          <MapFilter name="status" label="Estado" options={statuses.map(option)} query={query} />
         </div>
-      </div>
+        <div className="commercial-map-actions"><button className="primary">Aplicar filtros</button>
+          {query && <button type="button" onClick={() => { setQuery(''); setSelection([]) }}>Limpiar</button>}</div>
+      </form>
       <div className="commercial-map-columns">
         <figure>
-          <svg className="commercial-map-canvas" role="group" aria-label="Córdoba con marcadores de prospectos por localidad" viewBox={'0 0 ' + width + ' ' + height}>
-            <defs>
-              <pattern id="commercial-map-grid" width="36" height="36" patternUnits="userSpaceOnUse">
-                <path d="M36 0H0V36" className="commercial-map-gridlines" />
-              </pattern>
-            </defs>
-            <rect width={width} height={height} className="commercial-map-background" />
-            <rect width={width} height={height} fill="url(#commercial-map-grid)" />
-            <path className="commercial-map-outline" d={outlinePath} />
-            {groups.map((group) => {
-              const top = group.markers[0]
-              const label = [...new Set(group.markers.map((item) => item.city))].join(', ')
-              const kinds = new Set(group.markers.map((item) => category(item.status)))
-              const kind = kinds.size === 1 ? category(top.status) : 'mixed'
-              const select = () => setSelection(top.id)
-              return <g key={top.id} role="button" tabIndex={0}
-                aria-label={group.markers.length + ' prospectos en ' + label}
-                aria-pressed={selected === group} className="commercial-map-marker"
-                data-category={kind} transform={'translate(' + group.x + ' ' + group.y + ')'}
-                onClick={select} onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select() }
-                }}>
-                <circle r={group.markers.length === 1 ? 13 : 17} />
-                <text textAnchor="middle" dy=".34em">{group.markers.length}</text>
-                <title>{label}</title>
-              </g>
-            })}
-          </svg>
+          {viewport && <StreetMap data={viewport} selected={selection} onSelect={setSelection} />}
           <figcaption>
-            Centroides de localidades: <a href={data.attribution} target="_blank" rel="noreferrer">Servicio Georef</a> · CC BY 4.0.
-            {' '}Límite simplificado: <a href={data.cartography.url} target="_blank" rel="noreferrer">{data.cartography.source}</a> · {data.cartography.license}.
+            Puntos aproximados de <a href={data.attribution} target="_blank" rel="noreferrer">Georef</a> · CC BY 4.0. Contorno de <a href={data.cartography.url} target="_blank" rel="noreferrer">IDECOR</a> · {data.cartography.license}.
           </figcaption>
         </figure>
         <div className="commercial-map-results">
           <div className="commercial-map-toolbar">
-            <h2>{selected ? 'Grupo seleccionado' : 'Prospectos'}</h2>
-            {selected && <button onClick={() => setSelection(undefined)}>Ver todos</button>}
+            <h2 ref={panelHeading} tabIndex={-1}>{detail ? detail.name : selected.length ? 'Grupo seleccionado' : 'Empresas en el mapa'}</h2>
+            {selection.length > 0 && <button type="button" onClick={() => { returnTo.current = selection[0]; setSelection([]) }}>Ver todas</button>}
           </div>
-          {listed.length ? <ul className="records">{listed.map((item) => <li key={item.id}>
-            <strong>{item.name}</strong>
-            <small>{item.city} · {item.industry}</small>
-            <small>{item.status} · {item.location ? 'Localidad aproximada' : 'Sin coordenadas'}</small>
-            {item.nextFollowUp && <small>Próximo seguimiento: <time dateTime={item.nextFollowUp}>{item.nextFollowUp}</time></small>}
+          {selection.length > 0 && !selected.length && <p role="status">La empresa seleccionada no aparece entre estos resultados.</p>}
+          {detail ? <div className="commercial-map-detail" key={detail.id}>
+            <p>{[detail.city, detail.industry].filter(Boolean).join(' · ')}</p>
+            <dl><div><dt>Ubicación</dt><dd>{precisionLabel(detail)}</dd></div>
+              <div><dt>Estado comercial</dt><dd>{detail.status}{detail.archived ? ' · Archivada' : ''}</dd></div>
+              {detail.lastContact && <div><dt>Último contacto</dt><dd><time dateTime={detail.lastContact}>{when(detail.lastContact)}</time></dd></div>}
+              {detail.nextFollowUp && <div><dt>Próximo seguimiento</dt><dd><time dateTime={detail.nextFollowUp}>{detail.nextFollowUp}</time></dd></div>}
+            </dl>
             <div className="commercial-map-links">
-              <a href={'#prospect/' + encodeURIComponent(item.id)}>Ficha e historial</a>
-              {item.website && <a href={item.website} target="_blank" rel="noreferrer">Web oficial</a>}
+              <a className="button" href={'#prospect/' + encodeURIComponent(detail.id)}>Ficha e historial</a>
+              {detail.website && <a href={detail.website} target="_blank" rel="noreferrer">Web oficial</a>}
+              {detail.location && <a href={detail.location.sourceUrl} target="_blank" rel="noreferrer">Fuente de ubicación</a>}
             </div>
-          </li>)}</ul> : <Empty>El mapa no tiene prospectos con los filtros actuales.</Empty>}
+            <LocationForm item={detail} refresh={refresh} />
+          </div> : <>
+            <p className="muted commercial-map-count" role="status">{selected.length ? selected.length + ' empresas en el grupo' :
+              (positioned - exact) + ' aproximadas · ' + exact + ' exactas · ' + (data.items.length - positioned) + ' sin coordenadas'}</p>
+            {listed.length ? <ul className="commercial-map-list">{listed.map((item) => <li key={item.id}>
+              <button id={'map-result-' + item.id} type="button" className="street-result" aria-label={item.name} aria-describedby={'map-meta-' + item.id} onClick={() => setSelection([item.id])}>
+                <strong>{item.name}</strong><span id={'map-meta-' + item.id}>{[item.city, precisionLabel(item)].filter(Boolean).join(' · ')}</span><i aria-hidden="true">›</i>
+              </button>
+            </li>)}</ul> : <Empty>El mapa no tiene prospectos con los filtros actuales.</Empty>}
+          </>}
         </div>
       </div>
       <ul className="commercial-map-legend" aria-label="Estados del mapa">{Object.entries(categories).map(([kind, label]) =>
-        <li key={kind} data-category={kind}><span aria-hidden="true" />{label}</li>)}</ul>
+        <li key={kind} data-category={kind}><span aria-hidden="true" />{label}</li>)}<li><i aria-hidden="true" />Marcador discontinuo: localidad aproximada</li></ul>
+      <CoverageTable data={data.coverage ?? []} />
       <div className="toolbar commercial-map-download">
         {['geojson', 'csv', 'json'].map((format) => <DownloadButton key={format} path={'/map/export?' + (query ? query + '&' : '') + 'format=' + format} filename={'mapa-prospectos.' + format}>
           Exportar mapa {format === 'geojson' ? 'GeoJSON' : format.toUpperCase()}
@@ -170,6 +151,40 @@ export function CommercialMap({ revision }: { revision: number }) {
       </div>
     </section>
   }}</Resource>
+}
+
+function precisionLabel(item: Marker) {
+  if (!item.location) return 'Sin coordenadas'
+  return item.location.precision === 'EXACTA' ? 'Ubicación exacta' : 'Localidad aproximada'
+}
+
+function LocationForm({ item, refresh }: { item: Marker; refresh: () => void }) {
+  const action = useAction(refresh)
+  const fixed = item.location?.precision === 'EXACTA' ? item.location : undefined
+  const path = '/map/prospects/' + item.id + '/location'
+  return <details className="street-location"><summary>{fixed ? 'Editar ubicación exacta' : 'Confirmar ubicación exacta'}</summary>
+    <form className="fields" onSubmit={(event) => {
+      const fields = values(event)
+      void action.run(() => api(path, 'PUT', { latitude: Number(fields.latitude), longitude: Number(fields.longitude),
+        sourceUrl: fields.sourceUrl, verifiedOn: today(), confirm: true }), 'Ubicación confirmada.')
+    }}>
+      <label className="field">Latitud<input name="latitude" type="number" step="any" min="-90" max="90" defaultValue={fixed?.latitude} required /></label>
+      <label className="field">Longitud<input name="longitude" type="number" step="any" min="-180" max="180" defaultValue={fixed?.longitude} required /></label>
+      <label className="field wide">Fuente pública HTTPS<input name="sourceUrl" type="url" defaultValue={fixed?.sourceUrl} placeholder="https://…" required /></label>
+      <label className="check wide"><input type="checkbox" required />Confirmé que la ubicación corresponde a esta empresa.</label>
+      <div className="toolbar wide"><button className="primary" disabled={action.busy}>Guardar ubicación</button>
+        {fixed && <button type="button" disabled={action.busy} onClick={() => void action.run(() => api(path, 'DELETE'), 'Ubicación exacta retirada.')}>Retirar ubicación exacta</button>}</div>
+    </form><Feedback state={action} />
+  </details>
+}
+
+function CoverageTable({ data }: { data: NonNullable<MapView['coverage']> }) {
+  return <section className="inset"><h2>Cobertura de la cartera</h2><p className="muted">Conteos de las empresas que coinciden con los filtros.</p>
+    {data.length ? <div className="table-scroll inset"><table>
+      <thead><tr><th scope="col">Localidad</th><th scope="col">Registradas</th><th scope="col">Contactadas</th><th scope="col">Pendientes</th><th scope="col">Campañas</th></tr></thead>
+      <tbody>{data.map((row) => <tr key={row.city}><th scope="row">{row.city || 'Localidad pendiente'}</th><td>{row.registered}</td><td>{row.contacted}</td><td>{row.pending}</td><td>{row.campaigns}</td></tr>)}</tbody>
+    </table></div> : <Empty>Sin datos de cobertura para estos filtros.</Empty>}
+  </section>
 }
 
 const option = (value: string) => ({ value, label: value })

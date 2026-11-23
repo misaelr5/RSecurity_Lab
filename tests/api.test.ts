@@ -337,12 +337,56 @@ test('sesión monousuario protege archivos, exige clave y se invalida con logout
   assert.equal(lot.statusCode, 202)
   const lotUrl = '/api/v1/research/jobs/' + lot.json().id
   assert.equal((await app.inject({ url: lotUrl + '/summary', headers: cli })).statusCode, 200)
+  const secondCli = await send('POST', '/api/v1/operator/research-session', { key })
+  assert.equal(secondCli.statusCode, 200)
+  assert.equal((await app.inject({ url: lotUrl + '/summary', headers: cli })).statusCode, 200)
   assert.equal((await app.inject({ url: lotUrl, headers: cli })).statusCode, 401)
   assert.equal((await app.inject({ url: '/api/v1/prospects/export', headers: cli })).statusCode, 401)
+  const historyLogin = await send('POST', '/api/v1/operator/history-session', { key })
+  const history = { ...headers, authorization: 'Bearer ' + historyLogin.json().sessionToken }
+  assert.equal((await app.inject({ url: '/api/v1/history/export?format=json', headers: history })).statusCode, 200)
+  assert.equal((await app.inject({ url: lotUrl + '/summary', headers: history })).statusCode, 401)
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/history/import', headers: history, payload: {} })).statusCode, 401)
   assert.equal((await app.inject({ url: '/api/v1/retention', headers })).statusCode, 200)
   assert.equal((await app.inject({ method: 'POST', url: '/api/v1/operator/logout', headers, payload: {} })).statusCode, 200)
   assert.equal((await app.inject({ url: '/api/v1/prospects/export', headers })).statusCode, 401)
   assert.equal((await app.inject({ url: lotUrl + '/summary', headers: cli })).statusCode, 401)
+})
+
+test('una segunda instancia conserva el trabajo de la primera base', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'reac-lease-'))
+  const database = join(dir, 'guard.sqlite')
+  const options = { database, port: 4310, fixturePort: 4450 }
+  let owner: ReturnType<typeof createApp> | undefined
+  try {
+    owner = createApp(options)
+    assert.throws(() => createApp({ ...options, port: 4311 }), /Ya existe una instancia/)
+    await owner.close()
+    owner = createApp(options)
+    assert.equal((await owner.inject({ url: '/api/health', headers: { host: '127.0.0.1:4310' } })).statusCode, 200)
+  } finally {
+    await owner?.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ubicación exacta requiere confirmación y se conserva en las exportaciones', async (t) => {
+  const { send } = await setup(t)
+  const organization = (await send('POST', '/api/prospects', prospect)).json()
+  const path = '/api/map/prospects/' + organization.id + '/location'
+  const location = { latitude: -31.8, longitude: -65.01, verifiedOn: new Date().toISOString().slice(0, 10),
+    sourceUrl: 'https://www.openstreetmap.org/?token=entrada-local#map=17/-31.8/-65.01' }
+  assert.equal((await send('PUT', path, { ...location, confirm: false })).statusCode, 400)
+  assert.equal((await send('PUT', path, { ...location, latitude: -100, confirm: true })).statusCode, 400)
+  const confirmed = (await send('PUT', path, { ...location, confirm: true })).json()
+  assert.equal(confirmed.precision, 'EXACTA')
+  assert.equal(confirmed.sourceUrl, 'https://www.openstreetmap.org/#map=17/-31.8/-65.01')
+  const archive = (await send('GET', '/api/history/export?format=json')).json()
+  assert.equal(archive.companies[0].mapLocation.sourceUrl, confirmed.sourceUrl)
+  const geojson = (await send('GET', '/api/map/export?format=geojson')).json()
+  assert.deepEqual(geojson.features[0].geometry.coordinates, [location.longitude, location.latitude])
+  assert.equal(geojson.features[0].properties.precision, 'EXACTA')
+  assert.equal((await send('DELETE', path)).json().location.precision, 'LOCALIDAD_APROXIMADA')
 })
 
 test('descubrimiento manual exige confirmación, conserva duplicados y enlaza transferencia CRM', async (t) => {
@@ -364,4 +408,31 @@ test('descubrimiento manual exige confirmación, conserva duplicados y enlaza tr
   assert.equal((await send('POST', '/api/drafts/' + draft.id + '/review', { ...human, contentVersion: draft.contentVersion })).statusCode, 200)
   assert.match((await send('GET', '/api/prospects/export?mode=handoff')).body, /retiro de pedidos web/)
   assert.equal((await send('GET', '/api/crm/preview')).json()[0].crmIndustry, 'Otro')
+})
+
+test('las fechas futuras quedan en revisión y no cuentan como verificación comercial', async (t) => {
+  const { send } = await setup(t)
+  const consultedAt = new Date(Date.now() + 86400_000 * 365).toISOString().slice(0, 10)
+  const evidence = { url: 'https://ejemplo.example/reservas', consultedAt, provider: 'Fixture', statement: 'Formulario de reservas.' }
+  const created = await send('POST', '/api/prospects', { ...prospect, website: 'https://ejemplo.example/', verifiedAt: consultedAt })
+  assert.equal(created.statusCode, 201)
+  const orgId = created.json().id
+  const source = await send('POST', '/api/prospects/' + orgId + '/sources', evidence)
+  const observation = await send('POST', '/api/prospects/' + orgId + '/observations', {
+    sourceId: source.json().id, level: 'OBSERVACION_PUBLICA', title: 'Formulario', category: 'Función comercial publicada',
+    statement: 'Solicitud de reservas.', severity: 'INFORMATIVA', confidence: 'ALTA', impact: 'Operación comercial.',
+    limitations: 'Fuente documental.', recommendation: 'Confirmar fecha.',
+  })
+  assert.equal(observation.statusCode, 201)
+  assert.equal((await send('POST', '/api/observations/' + observation.json().id + '/review', human)).statusCode, 200)
+  const metrics = (await send('GET', '/api/commercial/metrics')).json()
+  assert.equal(metrics.verified, 0)
+  assert.equal(metrics.pending, 1)
+  assert.equal((await send('GET', '/api/retention')).json().prospectReviewDue, 1)
+  const response = await send('POST', '/api/discovery/import', { ...human, file: { version: 1, records: [{
+    ...prospect, name: 'Otra ficha de prueba', website: 'https://ejemplo.example/', evidence, applicationType: 'Reservas',
+    opportunity: 'Coordinar una conversación.',
+  }] } })
+  assert.equal(response.statusCode, 400)
+  assert.equal((await send('GET', '/api/commercial/metrics')).json().total, 1)
 })

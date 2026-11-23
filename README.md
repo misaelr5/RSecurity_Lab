@@ -51,6 +51,29 @@ Abrí http://127.0.0.1:4324/. La base y los archivos del piloto se guardan bajo 
 
 ## Recorrido
 
+### V4 · Instancia comercial
+
+La instancia V4 usa el puerto `4327` y una copia migrada de V3. Para reiniciarla en Windows desde este repositorio:
+
+```powershell
+npm.cmd run build
+$env:REAC_PORT = '4327'
+$env:REAC_STORAGE = 'private'
+$env:REAC_DATABASE = 'reac-prospeccion-v4.sqlite'
+$env:REAC_RESEARCH_CATALOG = 'piloto-v3-catalogo.json'
+$env:REAC_CODEX_ENABLED = '1'
+npm.cmd start
+```
+
+Abrí `http://127.0.0.1:4327/` e ingresá con el operador local. Desde Orca, las CLI de V4 operan sobre la API autenticada.
+
+```powershell
+.\scripts\research.ps1 -Query 'Reprospectá empresas de Córdoba Capital' -Quantity 50 -UseCodex
+.\scripts\history.ps1 -Region 'Córdoba Capital' -Format json -OutputFile .\data\historial-cordoba.json
+```
+
+[Reprospectar y actualizar](docs/REPROSPECCION.md) · [Historial reversible](docs/HISTORIAL.md) · [Campañas](docs/CAMPANAS.md) · [Enriquecimiento](docs/ENRIQUECIMIENTO_IA.md) · [Mapa](docs/MAPA_COMERCIAL.md)
+
 ### Prospección V3
 
 En la instancia V3 del piloto, abrí [Prospección con IA](http://127.0.0.1:4326/#research). Podés buscar en el catálogo local por cantidad, región, ciudad, rubro y aplicación. Desde una conversación de Orca abierta en el repositorio, pedile que busque en el catálogo y ejecute la CLI. Para una investigación nueva fuera del catálogo, Orca debe cotejar fuentes corporativas permitidas y preparar el lote antes de ejecutarla.

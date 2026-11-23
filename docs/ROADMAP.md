@@ -28,3 +28,9 @@
 - [ ] Aprobar la composición visual de `#preview` antes de cambiar la pantalla principal.
 - [ ] Integrar un proveedor de descubrimiento web con condiciones aptas para almacenar y utilizar datos comerciales. Actualmente el dashboard filtra el catálogo y Orca investiga las fuentes nuevas para preparar el ingreso.
 - [ ] Ampliar cobertura cartográfica y evaluar geocodificación de direcciones con fuente verificable y licencia compatible.
+
+## V4
+
+- Reprospección con historial, exclusiones, lotes reanudables, búsquedas guardadas y decisiones versionadas.
+- Historial portable con importación incremental y exportaciones comerciales. Campañas, enriquecimiento revisado y cobertura de cartera sobre el mapa existente.
+- Simulación local y métricas sobre hitos explícitos. El descubrimiento externo sigue usando evidencia cotejada en Orca. Queda por integrar un proveedor autorizado con condiciones compatibles y, cuando se compruebe la fuente, cobertura de direcciones exactas.

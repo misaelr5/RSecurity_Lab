@@ -10,6 +10,7 @@ import type { AIProvider, ProspectingFilters } from './ai-provider.ts'
 import { attach, parse, problem, must } from './http.ts'
 import { hostname, identityKeys } from './prospect-identity.ts'
 import type { IdentityHistory } from './prospect-identity.ts'
+import { batchCompletedAction, describeBatch } from './research-activity.ts'
 
 const filterValues = z.strictObject({
   quantity: z.number().int().min(1).max(100).optional(), region: text(120).optional(),
@@ -33,15 +34,16 @@ type Input = z.output<typeof body>
 type Saved = z.output<typeof savedSchema>
 type StartInput = { input: Input; catalogHash?: string }
 const review = z.strictObject({ reviewer: required(120), confirm: z.literal(true) })
+const reviewVersion = z.string().regex(/^[a-f0-9]{64}$/)
 const decisions = review.extend({ decisions: z.array(z.strictObject({ id,
   action: z.enum(['approve', 'reject', 'exclude', 'link', 'edit', 'enrich']), organizationId: id.optional(),
-  record: discoveryFile.shape.records.element.optional(), reason: text(500).optional(),
+  record: discoveryFile.shape.records.element.optional(), reason: text(500).optional(), contentVersion: reviewVersion.optional(),
 })).min(1).max(25) })
 const working = ['PENDIENTE', 'INVESTIGANDO', 'VERIFICANDO', 'IMPORTANDO']
 type State = 'PENDIENTE' | 'INVESTIGANDO' | 'VERIFICANDO' | 'IMPORTANDO' | 'COMPLETADO' | 'PARCIAL' | 'FALLIDO' | 'CANCELADO'
 export type ResearchCatalog = z.output<typeof discoveryFile>
 type Record = ResearchCatalog['records'][number]
-type Candidate = { record: Record; outcome: 'IMPORTADO' | 'DUPLICADO' | 'EXCLUIDO' | 'EN_REVISION' | 'FUERA_DE_CUPO' | 'RECHAZADO' | 'VINCULADO' | 'ACTUALIZAR' | 'ENRIQUECIMIENTO'; reason: string; organizationId?: string; reviewedAt?: string; reviewer?: string; decisionReason?: string; proposalId?: string; kind?: 'ambiguous' | 'incomplete' }
+type Candidate = { record: Record; outcome: 'IMPORTADO' | 'DUPLICADO' | 'EXCLUIDO' | 'EN_REVISION' | 'FUERA_DE_CUPO' | 'RECHAZADO' | 'VINCULADO' | 'ACTUALIZAR' | 'ENRIQUECIMIENTO'; reason: string; organizationId?: string; reviewedAt?: string; reviewer?: string; decisionReason?: string; proposalId?: string; kind?: 'ambiguous' | 'incomplete'; sourceVerified?: boolean }
 type Organization = Prospect & IdentityHistory & { archivedAt?: string }
 type Job = {
   state: State; provider: string; requestHash: string; goal: number; filters?: ProspectingFilters & z.output<typeof filterValues>; reason?: string
@@ -68,6 +70,7 @@ const lacksContact = (record: Record) => !record.email && !record.phone && !reco
 const safeEvidence = (record: Record, now: number) => firstParty(record) && withinReviewWindow(record.evidence.consultedAt, now) &&
   !suspicious([record.evidence.statement, record.corroboration?.statement, record.opportunity].filter(Boolean).join(' '))
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const candidateVersion = (candidate: Candidate & { id: string; updatedAt: string }) => fingerprint([candidate.id, candidate.updatedAt, candidate.record, candidate.outcome, candidate.kind, candidate.organizationId])
 type ResearchLinks = {
   requireCampaign?: (campaignId: string) => void
   addMember?: (campaignId: string, organizationId: string, jobId: string) => void
@@ -105,7 +108,7 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
     const engagement = new Map(store.list('engagements').map((item) => [item.parent, item.id]))
     const seen = new Map<string, Candidate[]>()
     for (const candidate of store.list<Candidate>('research_candidates')) {
-      if (candidate.parent === currentJob) continue
+      if (candidate.parent === currentJob || candidate.outcome === 'FUERA_DE_CUPO') continue
       for (const key of identityKeys(candidate.record)) {
         const values = seen.get(key) ?? []
         values.push(candidate)
@@ -157,17 +160,21 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
 
   function updateCandidate(record: Record, input: Input, index: ReturnType<typeof commercialIndex>, now: number): Omit<Candidate, 'record'> {
     const candidates = matches(record, index)
+    if (identityKeys(record).some((key) => index.seen.get(key)?.some((old) => old.outcome === 'EXCLUIDO' && Boolean(old.reviewedAt)))) {
+      return { outcome: 'EXCLUIDO', reason: 'Identidad vinculada a una exclusión vigente.' }
+    }
+    if (input.organizationId && !candidates.some((org) => org.id === input.organizationId)) return { outcome: 'FUERA_DE_CUPO', reason: 'La evidencia corresponde a otra ficha.' }
     const exact = candidates.find((org) => keyFor(org) === keyFor(record))
     const target = input.organizationId ? candidates.find((org) => org.id === input.organizationId) : exact ?? (candidates.length === 1 ? candidates[0] : undefined)
     if (!target) return { outcome: 'EN_REVISION', kind: 'ambiguous', reason: 'Identificá la ficha existente antes de proponer cambios.' }
     if (target.archivedAt || optedOut(target) || target.status === 'Perdido') return { outcome: 'EXCLUIDO', reason: 'La ficha está archivada, descartada o excluida.' }
-    if (input.recentDays && Date.parse(target.createdAt) < now - input.recentDays * 86400_000) return { outcome: 'FUERA_DE_CUPO', reason: 'La ficha está fuera del período solicitado.' }
+    if (input.recentDays && Math.max(Date.parse(target.createdAt), Date.parse(target.verifiedAt) || 0) < now - input.recentDays * 86400_000) return { outcome: 'FUERA_DE_CUPO', reason: 'La ficha está fuera del período solicitado.' }
     return { outcome: 'ACTUALIZAR', organizationId: target.id, reason: 'Compará la fuente con la ficha existente antes de aplicar cambios.' }
   }
 
   function candidateCategory(candidate: Candidate) {
     if (candidate.outcome === 'IMPORTADO' || candidate.outcome === 'VINCULADO' || candidate.outcome === 'ENRIQUECIMIENTO') return 'verified'
-    if (candidate.outcome === 'EXCLUIDO') return 'excluded'
+    if (candidate.outcome === 'EXCLUIDO' || candidate.outcome === 'RECHAZADO') return 'excluded'
     if (candidate.outcome === 'DUPLICADO' || candidate.kind === 'ambiguous' || (candidate.outcome === 'EN_REVISION' && candidate.reason.startsWith('Identidad compartida'))) return 'duplicate'
     if (candidate.kind === 'incomplete') return 'incomplete'
     return 'pending'
@@ -181,7 +188,7 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
   }
   app.get<{ Params: { id: string } }>('/api/research/jobs/:id', (request) => {
     const job = get(request.params.id)
-    return { job: summary(job), results: rows(job.id) }
+    return { job: summary(job), results: rows(job.id).map((candidate) => ({ ...candidate, contentVersion: candidateVersion(candidate) })) }
   })
   app.get<{ Params: { id: string } }>('/api/research/jobs/:id/export', (request, reply) => {
     const job = get(request.params.id)
@@ -255,7 +262,8 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
           for (const record of eligible) {
             const verified = attested && record.confidence === 'ALTA' && safeEvidence(record, now)
             if (verified) counts.verified++
-            const conflict = input.mode === 'update' ? updateCandidate(record, input, index, now) : collision(record, index, input.excludeContacted)
+            let conflict = input.mode === 'update' ? updateCandidate(record, input, index, now) : collision(record, index, input.excludeContacted)
+            if (conflict?.outcome === 'ACTUALIZAR' && counts.pending >= filters.quantity) conflict = { outcome: 'FUERA_DE_CUPO', reason: 'El lote alcanzó el cupo de actualizaciones.' }
             let candidate: Candidate
             if (conflict) {
               candidate = { record, ...conflict, organizationId: conflict.outcome === 'DUPLICADO' && input.excludeExisting ? undefined : conflict.organizationId }
@@ -278,14 +286,14 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
               counts.imported++
               index = commercialIndex(job)
             }
-            store.insert('research_candidates', candidate, job)
+            store.insert('research_candidates', { ...candidate, sourceVerified: verified }, job)
           }
           const completed = input.mode === 'update' ? eligible.length > 0 : counts.imported >= filters.quantity
           const state = completed ? 'COMPLETADO' : 'PARCIAL'
           const reason = input.mode === 'update' && completed ? 'Comparaciones preparadas para revisión.' :
             state === 'PARCIAL' ? 'La evidencia o la cantidad disponible quedó por debajo del objetivo.' : undefined
-          update(job, { ...counts, state, reason, resumable: false })
-          store.log('Lote de prospección procesado', job)
+          const completedJob = update(job, { ...counts, state, reason, resumable: false })
+          store.log(batchCompletedAction, job, describeBatch(completedJob))
         })
       } catch (error) {
         const state = signal.aborted ? 'CANCELADO' : 'FALLIDO'
@@ -357,11 +365,15 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
     return store.list<Job>('research_jobs').filter((job) => job.savedId === id).slice(0, 100).map(summary)
   })
   app.post<{ Params: { id: string } }>('/api/research/saved/:id/run', (request, reply) => {
-    const { requestId } = parse(z.strictObject({ requestId: id, file: discoveryFile.optional(), verifiedSources: z.boolean().default(false) }), request.body)
+    const options = parse(z.strictObject({ requestId: id, file: discoveryFile.optional(), verifiedSources: z.boolean().default(false) }), request.body)
     const entry = saved(request.params.id)
-    const previous = store.find<Job>('research_jobs', requestId, 'unique_key')
-    if (previous?.savedId === entry.id) return reply.send(summary(previous))
-    const result = launch(parse(body, { ...entry.configuration, ...(request.body as object), requestId }), entry.id)
+    const previous = store.find<Job>('research_jobs', options.requestId, 'unique_key')
+    if (previous?.savedId === entry.id) {
+      const original = store.find<StartInput>('research_inputs', previous.id, 'unique_key')?.input
+      if (!original || original.verifiedSources !== options.verifiedSources || fingerprint(original.file ?? null) !== fingerprint(options.file ?? null)) throw problem(409, 'El identificador corresponde a otro archivo o confirmación.')
+      return reply.send(summary(previous))
+    }
+    const result = launch(parse(body, { ...entry.configuration, ...options }), entry.id)
     return reply.code(result.status).send(result.job)
   })
 
@@ -387,18 +399,20 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
   })
 
   app.get('/api/research/review', (request) => {
-    const { category, page } = parse(z.strictObject({ category: z.enum(['verified', 'pending', 'duplicate', 'incomplete', 'excluded', 'error', 'all']).default('all'),
+    const { category, page, candidateId } = parse(z.strictObject({ candidateId: id.optional(), category: z.enum(['verified', 'pending', 'duplicate', 'incomplete', 'excluded', 'error', 'all']).default('all'),
       page: z.coerce.number().int().min(1).max(10000).default(1) }), request.query)
     const index = commercialIndex()
-    const candidates = category === 'error' ? [] : store.list<Candidate>('research_candidates').filter((value) => category === 'all' || category === candidateCategory(value))
-    const errors = category === 'all' || category === 'error' ? store.list<Job>('research_jobs').filter((job) => job.state === 'FALLIDO').slice(0, 100).map(summary) : []
-    return { candidates: candidates.slice((page - 1) * 100, page * 100).map((value) => ({ ...value, jobId: value.parent, category: candidateCategory(value), missing: unavailableFields(value.record),
+    const records = candidateId ? [must(store.find<Candidate>('research_candidates', candidateId))] : category === 'error' ? [] : store.list<Candidate>('research_candidates')
+    const candidates = records.filter((value) => category === 'all' || category === candidateCategory(value))
+    const errors = !candidateId && (category === 'all' || category === 'error') ? store.list<Job>('research_jobs').filter((job) => job.state === 'FALLIDO').slice(0, 100).map(summary) : []
+    return { candidates: candidates.slice((page - 1) * 100, page * 100).map((value) => ({ ...value, jobId: value.parent, category: candidateCategory(value), missing: unavailableFields(value.record), contentVersion: candidateVersion(value),
       matches: matches(value.record, index).map(({ id, name, city }) => ({ id, name, city })) })), total: candidates.length, page, errors }
   })
 
   function applyReview(candidate: NonNullable<ReturnType<typeof store.find<Candidate>>>, job: ReturnType<typeof get>, decision: z.output<typeof decisions>['decisions'][number], reviewer: string) {
     if (working.includes(job.state)) throw problem(409, 'Esperá que termine el lote.')
     if (!['EN_REVISION', 'ACTUALIZAR'].includes(candidate.outcome)) throw problem(409, 'La ficha no está pendiente dentro de este lote.')
+    if (decision.contentVersion !== candidateVersion(candidate)) throw problem(409, 'Volvé a cargar la candidatura, su contenido cambió.')
     const reviewedAt = new Date().toISOString()
     const index = commercialIndex()
     let change: Partial<Candidate>
@@ -434,12 +448,14 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
         }
       }
     }
-    const saved = store.update<Candidate>('research_candidates', candidate.id, { ...candidate, ...change, reviewedAt, reviewer, decisionReason: decision.reason })
+    const verified = decision.action === 'edit' ? false : decision.action === 'approve' || Boolean(candidate.sourceVerified)
+    const saved = store.update<Candidate>('research_candidates', candidate.id, { ...candidate, ...change, reviewedAt, reviewer, decisionReason: decision.reason, sourceVerified: verified })
+    const verifiedCount = Math.min(job.found, Math.max(0, job.verified + Number(verified) - Number(Boolean(candidate.sourceVerified))))
     if (decision.action !== 'edit') {
       const imported = job.imported + Number(saved.outcome === 'IMPORTADO')
-      update(job.id, { imported, verified: job.verified + Number(saved.outcome === 'IMPORTADO'), pending: Math.max(0, job.pending - 1),
+      update(job.id, { imported, verified: verifiedCount, pending: Math.max(0, job.pending - 1),
         excluded: job.excluded + Number(saved.outcome === 'EXCLUIDO'), state: imported >= job.goal ? 'COMPLETADO' : job.state })
-    }
+    } else update(job.id, { verified: verifiedCount })
     store.log('Decisión de revisión comercial registrada', candidate.id)
     return saved
   }
@@ -455,8 +471,8 @@ export function registerResearch(app: FastifyInstance, store: Store, portfolio: 
   app.post<{ Params: { id: string; candidateId: string } }>('/api/research/jobs/:id/candidates/:candidateId/review', (request) => store.transaction(() => {
     const job = get(request.params.id)
     const candidate = must(store.find<Candidate>('research_candidates', parse(id, request.params.candidateId)))
-    const { reviewer } = parse(review, request.body)
+    const { reviewer, contentVersion } = parse(review.extend({ contentVersion: reviewVersion.optional() }), request.body)
     if (candidate.parent !== job.id) throw problem(409, 'La ficha no pertenece al lote.')
-    return applyReview(candidate, job, { id: candidate.id, action: 'approve' }, reviewer)
+    return applyReview(candidate, job, { id: candidate.id, action: 'approve', contentVersion: contentVersion ?? (job.mode ? undefined : candidateVersion(candidate)) }, reviewer)
   }))
 }

@@ -1,5 +1,5 @@
 import { Assets, CommercialTimeline, OpportunityScore } from './public-work.tsx'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { regions, statuses, consentOptions, applicationTypes } from '../../../packages/core/src/constants.ts'
 import { api, today, when } from './client.ts'
 import type { Detail, Organization, Page } from './client.ts'
@@ -90,20 +90,28 @@ function ProspectForm({ item, busy, onSave }: { item?: Organization; busy: boole
   </form>
 }
 
-export function ProspectDetail({ id, revision, refresh, onlyEvidence }: Props & { id: string; onlyEvidence: boolean }) {
+type DraftTarget = { focusDrafts?: boolean; draftId?: string }
+export function ProspectDetail({ id, revision, refresh, onlyEvidence, focusDrafts, draftId }: Props & DraftTarget & { id: string; onlyEvidence: boolean }) {
   const result = useResource<Detail>('/prospects/' + id, revision)
-  return <Resource result={result}>{(data) => <PortfolioDetail data={data} refresh={refresh} onlyEvidence={onlyEvidence} revision={revision} />}</Resource>
+  return <Resource result={result}>{(data) => <PortfolioDetail data={data} refresh={refresh} onlyEvidence={onlyEvidence} focusDrafts={focusDrafts} draftId={draftId} revision={revision} />}</Resource>
 }
-function PortfolioDetail({ data, refresh, onlyEvidence, revision }: Omit<Props, 'open'> & { data: Detail; onlyEvidence: boolean }) {
+function PortfolioDetail({ data, refresh, onlyEvidence, focusDrafts, draftId, revision }: Omit<Props, 'open'> & DraftTarget & { data: Detail; onlyEvidence: boolean }) {
   const { org } = data
   const action = useAction(refresh)
   const [editing, setEditing] = useState(false)
+  const draftsHeading = useRef<HTMLHeadingElement>(null)
+  const selectedDraft = useRef<HTMLLIElement>(null)
+  useEffect(() => {
+    if (focusDrafts) (selectedDraft.current ?? draftsHeading.current)?.focus()
+  }, [focusDrafts, draftId])
   const blocked = org.status === 'No contactar' || org.consent === 'Excluido'
   const archived = Boolean(org.archivedAt)
   const run = action.run
   return <>
     <div className="toolbar"><a className="button" href={onlyEvidence ? '#evidence' : '#prospects'}>Volver al listado</a><a className="button" href={'#reports/prospect/' + org.id}>Ver informe</a>
       {!onlyEvidence && <button onClick={() => setEditing(!editing)}>{editing ? 'Cerrar edición' : 'Editar ficha'}</button>}
+      {!onlyEvidence && <a className="button" href={'#enrichment/' + org.id}>Enriquecer con IA</a>}
+      <a className="button" href={'#map/prospect/' + org.id}>Ubicar en el mapa</a>
     </div>
     <Feedback state={action} />
     <section className="panel profile"><div><h2>{org.name}</h2><p className="muted">{org.industry} · {org.city} · {org.region}{org.applicationType ? ' · ' + org.applicationType : ''}</p></div><span className="tag">{blocked ? 'Excluido' : org.status}</span>
@@ -146,13 +154,13 @@ function PortfolioDetail({ data, refresh, onlyEvidence, revision }: Omit<Props, 
     <Assets id={org.id} sources={data.sources} revision={revision} refresh={refresh} />
     {!onlyEvidence && <div className="split"><CommercialTimeline id={org.id} revision={revision} refresh={refresh} blocked={blocked || archived} /><OpportunityScore id={org.id} revision={revision} /></div>}
     {!onlyEvidence && <section className="panel">
-      <h2>Mensajes comerciales</h2>
+      <h2 ref={draftsHeading} tabIndex={-1}>Mensajes comerciales</h2>
       {blocked || archived ? <Empty>{blocked ? 'El prospecto está excluido de contacto.' : 'La ficha está archivada.'}</Empty> : <>
         <p className="muted">Prepará y revisá el mensaje para usarlo por tu cuenta.</p>
         <button onClick={() => void run(() => api('/prospects/' + org.id + '/drafts', 'POST'), 'Borrador creado.')} disabled={action.busy}>Crear borrador</button>
         <button onClick={() => void run(() => api('/prospects/' + org.id + '/drafts', 'POST', { channel: 'WhatsApp' }), 'Borrador de WhatsApp creado.')} disabled={action.busy}>Preparar WhatsApp</button>
       </>}
-      <ul className="records">{data.drafts.map((item) => <li key={item.id}><strong>{item.subject}</strong><span className="tag">{item.channel ?? 'Email'}</span>
+      <ul className="records">{data.drafts.map((item) => <li key={item.id} ref={draftId === item.id ? selectedDraft : undefined} tabIndex={draftId === item.id ? -1 : undefined}><strong>{item.subject}</strong><span className="tag">{item.channel ?? 'Email'}</span>
         <small>{item.reviewedAt ? 'Aprobado para uso manual · ' + item.reviewer : 'Borrador'}</small><p className="pre">{item.body}</p>
         {!blocked && !archived && <div className="split"><details><summary>Editar mensaje</summary><form className="fields" onSubmit={(event) => {
           const payload = values(event)

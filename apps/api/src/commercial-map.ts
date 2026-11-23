@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify'
-import { normalize, optedOut, statuses, z } from '@reac/core'
+import { date, id, normalize, optedOut, statuses, url, z } from '@reac/core'
 import type { Prospect } from '@reac/core'
 import { csvCell } from '@reac/reporting'
-import { attach, parse } from './http.ts'
+import { attach, must, parse, problem } from './http.ts'
 import type { Store } from './store.ts'
 
 const georef = 'https://www.argentina.gob.ar/georef'
@@ -42,17 +42,29 @@ const aliases = { 'cordoba capital': 'cordoba', 'ciudad de cordoba': 'cordoba', 
   yacanto: 'san javier y yacanto', 'las rosas': 'villa de las rosas', 'cura brochero': 'villa cura brochero' } as const
 const traslasierraOnly = new Set(['san pedro', 'san lorenzo', 'la paz', 'villa sarmiento', 'san javier', 'yacanto'])
 
-type Organization = Prospect & { campaignId?: string; province?: string; address?: string }
+export const verifiedLocation = z.strictObject({
+  latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
+  sourceUrl: url.refine((value) => value.startsWith('https://')).transform((value) => {
+    const source = new URL(value)
+    const mapHash = ['openstreetmap.org', 'www.openstreetmap.org'].includes(source.hostname) && /^#map=\d+\/-?\d+(?:\.\d+)?\/-?\d+(?:\.\d+)?$/.test(source.hash) ? source.hash : ''
+    return source.origin + source.pathname + mapHash
+  }),
+  verifiedOn: date,
+})
+type VerifiedLocation = z.output<typeof verifiedLocation>
+type Organization = Prospect & { campaignId?: string; archivedAt?: string; mapLocation?: VerifiedLocation }
 type Filter = z.output<typeof filters>
 const filters = z.strictObject({
   q: z.string().trim().max(120).optional(),
   city: z.string().trim().max(120).optional(),
+  region: z.string().trim().max(120).optional(),
   industry: z.string().trim().max(120).optional(),
   campaign: z.union([z.uuid(), z.literal('none')]).optional(),
   status: z.enum(statuses).optional(),
 })
 
 function position(item: Organization) {
+  if (item.mapLocation) return { ...item.mapLocation, precision: 'EXACTA' as const, license: null }
   const region = normalize(item.region)
   const city = normalize(item.city)
   if (item.province && !['cordoba', 'provincia de cordoba'].includes(normalize(item.province))) return null
@@ -91,7 +103,38 @@ function geographicCsv(rows: unknown[][]) {
 }
 
 export function registerCommercialMap(app: FastifyInstance, store: Store) {
+  app.put<{ Params: { id: string } }>('/api/map/prospects/:id/location', (request) => store.transaction(() => {
+    const organization = must(store.find<Organization>('organizations', parse(id, request.params.id)))
+    const { confirm, ...mapLocation } = parse(verifiedLocation.extend({ confirm: z.literal(true) }), request.body)
+    void confirm
+    if (mapLocation.verifiedOn > new Date().toISOString().slice(0, 10)) throw problem(400, 'La fecha de confirmación debe ser hoy o anterior.')
+    store.update<Organization>('organizations', organization.id, { ...organization, mapLocation })
+    store.log('Ubicación exacta confirmada', organization.id)
+    return { ...mapLocation, precision: 'EXACTA' }
+  }))
+  app.delete<{ Params: { id: string } }>('/api/map/prospects/:id/location', (request) => store.transaction(() => {
+    parse(z.strictObject({}), request.body)
+    const organization = must(store.find<Organization>('organizations', parse(id, request.params.id)))
+    if (organization.mapLocation) {
+      store.update<Organization>('organizations', organization.id, { ...organization, mapLocation: undefined })
+      store.log('Ubicación exacta retirada', organization.id)
+    }
+    return { location: position({ ...organization, mapLocation: undefined }) }
+  }))
+
   function view(query: Filter) {
+    const commercialCampaigns = store.list<{ name: string }>('campaigns').map(({ id, name }) => ({ id, name }))
+    const memberships = new Map<string | null, string[]>()
+    for (const member of store.list<{ campaignId: string }>('campaign_memberships')) {
+      const ids = memberships.get(member.parent) ?? []
+      ids.push(member.campaignId)
+      memberships.set(member.parent, ids)
+    }
+    const contacts = new Map<string | null, string>()
+    for (const event of store.list<{ stage: string }>('pipeline_events')) {
+      if (event.stage === 'Contactado' && !contacts.has(event.parent)) contacts.set(event.parent, event.createdAt)
+    }
+    const organizationsContacted = new Map(store.list('engagements').map((engagement) => [engagement.parent, contacts.get(engagement.id)]))
     const rows = store.list<Organization>('organizations').map((item) => ({
       id: item.id,
       name: item.name,
@@ -100,21 +143,32 @@ export function registerCommercialMap(app: FastifyInstance, store: Store) {
       industry: item.industry,
       status: optedOut(item) ? 'No contactar' as const : item.status,
       campaignId: item.campaignId ?? null,
+      campaignIds: memberships.get(item.id) ?? [],
+      archived: Boolean(item.archivedAt),
+      lastContact: organizationsContacted.get(item.id),
+      pending: !item.archivedAt && !optedOut(item) && item.status !== 'Perdido' && item.status !== 'Ganado' && !organizationsContacted.get(item.id),
       website: publicWebsite(item.website),
       nextFollowUp: item.nextFollowUp,
       location: position(item),
     }))
     const cities = [...new Set(rows.map((row) => row.city).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'))
+    const regions = [...new Set(rows.map((row) => row.region).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'))
     const industries = [...new Set(rows.map((row) => row.industry).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'))
     const campaigns = [...new Set(rows.map((row) => row.campaignId).filter((row): row is string => Boolean(row)))].sort()
     const q = normalize(query.q ?? '')
     const items = rows.filter((row) =>
       (!q || normalize([row.name, row.city, row.website].join(' ')).includes(q)) &&
       (!query.city || normalize(row.city) === normalize(query.city)) &&
+      (!query.region || normalize(row.region) === normalize(query.region)) &&
       (!query.industry || normalize(row.industry) === normalize(query.industry)) &&
-      (!query.campaign || (query.campaign === 'none' ? row.campaignId === null : row.campaignId === query.campaign)) &&
+      (!query.campaign || (query.campaign === 'none' ? row.campaignId === null && !row.campaignIds.length : row.campaignId === query.campaign || row.campaignIds.includes(query.campaign))) &&
       (!query.status || row.status === query.status))
-    return { items, cities, industries, campaigns, cartography, attribution: georef }
+    const coverage = cities.map((city) => {
+      const local = items.filter((row) => row.city === city)
+      return { city, registered: local.length, contacted: local.filter((row) => row.lastContact).length, pending: local.filter((row) => row.pending).length,
+        campaigns: new Set(local.flatMap((row) => row.campaignIds)).size }
+    }).filter((entry) => entry.registered > 0)
+    return { items, cities, regions, industries, campaigns, commercialCampaigns, coverage, cartography, attribution: georef }
   }
 
   app.get('/api/map/prospects', (request) => view(parse(filters, request.query)))
