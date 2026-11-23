@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from './client.ts'
-import { Empty, Feedback, Resource, Review, useAction, useResource } from './widgets.tsx'
+import { DownloadButton, Empty, Feedback, Resource, Review, useAction, useResource } from './widgets.tsx'
 
 const directories = [
   ['Villa Dolores', 'Alojamientos · Municipalidad', 'https://villadolores.gov.ar/alojamientos-villa-dolores/'],
@@ -61,6 +61,6 @@ function CrmPreview({ revision }: { revision: number }) {
   const result = useResource<Transfer[]>('/crm/preview', revision)
   return <Resource result={result}>{(items) => items.length ? <>
     <ul className="records">{items.map((item) => <li key={item.id}><strong>{item.name}</strong><small>{item.crmIndustry === item.industry ? item.industry : item.industry + ' → ' + item.crmIndustry} · {item.blocked ? 'Excluida' : item.approved ? 'Borrador aprobado incluido' : 'Sin borrador aprobado'}</small></li>)}</ul>
-    <a className="button primary" href="/api/v1/prospects/export?mode=handoff">Descargar CSV para Reac Leads</a>
+    <DownloadButton primary path="/prospects/export?mode=handoff" filename="reac-leads-v1.csv">Descargar CSV para Reac Leads</DownloadButton>
   </> : <Empty>La cartera todavía está vacía.</Empty>}</Resource>
 }

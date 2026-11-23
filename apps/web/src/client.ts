@@ -20,17 +20,43 @@ export type AuditDetail = { run: Audit; evidence: { id: string; statusCode: numb
 export type Settings = { database: string; version: string; fixture: string; tools: { name: string; status: string }[]; limits: Record<string, number> }
 export type { Report }
 
-export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch('/api/v1' + path, {
-    method,
-    ...(method === 'GET' ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) }),
+export function saveOperatorToken(value?: string) {
+  if (value) sessionStorage.setItem('reac-operator-session', value)
+  else sessionStorage.removeItem('reac-operator-session')
+}
+
+async function request(path: string, method = 'GET', body?: unknown) {
+  const headers = new Headers()
+  const token = sessionStorage.getItem('reac-operator-session')
+  if (token) headers.set('Authorization', 'Bearer ' + token)
+  if (method !== 'GET') headers.set('Content-Type', 'application/json')
+  const response = await fetch('/api/v1' + path, { method, headers, redirect: 'error', credentials: 'omit',
+    ...(method === 'GET' ? {} : { body: JSON.stringify(body ?? {}) }),
   })
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith('/operator/')) window.dispatchEvent(new Event('reac-session-expired'))
+    if (response.status === 401 && path !== '/operator/login') {
+      saveOperatorToken()
+      window.dispatchEvent(new Event('reac-session-expired'))
+    }
     const error = await response.json().catch(() => ({}))
     throw new Error(error.message ?? error.reason ?? 'La operación no se pudo completar.')
   }
+  return response
+}
+
+export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const response = await request(path, method, body)
   return (response.status === 204 ? undefined : await response.json()) as T
+}
+
+export async function download(path: string, filename: string) {
+  const response = await request(path)
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export const when = (value: string) => new Intl.DateTimeFormat('es-AR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))

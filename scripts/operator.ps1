@@ -1,9 +1,23 @@
-param([switch]$CopyKey)
+param([switch]$CopyKey, [switch]$ProtectStorage)
 $ErrorActionPreference = 'Stop'
 if (!$env:LOCALAPPDATA) { throw 'LOCALAPPDATA no está disponible.' }
 $root = Join-Path $env:LOCALAPPDATA 'ReacStudio/SecurityLab'
 [IO.Directory]::CreateDirectory($root) | Out-Null
 $path = Join-Path $root 'operator.json'
+if ($ProtectStorage -or !$CopyKey) {
+  $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $security = Get-Acl -LiteralPath $root
+  if ($security.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $owner.Value) { throw 'Ejecutá la preparación con la cuenta propietaria del perfil.' }
+  $security.SetAccessRuleProtection($true, $false)
+  foreach ($rule in @($security.Access)) { $security.RemoveAccessRuleSpecific($rule) }
+  foreach ($sid in @($owner.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+    $principal = [Security.Principal.SecurityIdentifier]::new($sid)
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new($principal, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $security.AddAccessRule($rule)
+  }
+  Set-Acl -LiteralPath $root -AclObject $security
+  if ($ProtectStorage) { Write-Output 'Permisos privados aplicados a la carpeta de Security Lab.'; exit }
+}
 if ($CopyKey) {
   $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
   $secure = ConvertTo-SecureString $data.protectedKey

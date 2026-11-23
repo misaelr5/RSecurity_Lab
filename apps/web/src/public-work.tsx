@@ -84,7 +84,7 @@ export function PipelineOverview({ revision }: { revision: number }) {
 
 export function OpportunityScore({ id, revision }: Pick<ItemProps, 'id' | 'revision'>) {
   const [filter, setFilter] = useState('')
-  const resource = useResource<{ score: number | null; signals: { label: string; weight: number; present: boolean }[] }>(
+  const resource = useResource<{ score: number | null; signals: { label: string; weight: number; present: boolean; factor: number; detail: string }[] }>(
     '/prospects/' + id + '/score' + filter, revision)
   return <section className="panel">
     <h2>Prioridad comercial</h2>
@@ -92,7 +92,7 @@ export function OpportunityScore({ id, revision }: Pick<ItemProps, 'id' | 'revis
     <Resource result={resource}>{(result) => <>
       <p>{result.score === null ? 'Ficha excluida de contacto' : 'Puntaje ' + result.score + ' de 100'}</p>
       <ul className="records">{result.signals.map((signal) => <li key={signal.label}>{signal.label}<small>
-        {signal.present ? 'Registrado' : 'Pendiente'} · Peso {signal.weight}
+        {signal.present ? signal.detail : 'Pendiente'} · {Math.round(signal.factor * signal.weight)} de {signal.weight} puntos
       </small></li>)}</ul>
     </>}</Resource>
     <details><summary>Ajustar pesos para esta ficha</summary>

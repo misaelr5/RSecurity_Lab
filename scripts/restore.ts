@@ -9,4 +9,4 @@ if (!source || !target || !backupName.test(source) || extra.length || (option &&
 const root = activeDataRoot()
 const dir = option === '--legacy' ? resolve(root, 'backups') : backupDirectory(process.env.REAC_DATABASE ?? 'reac.sqlite', root)
 await restoreBackup(resolve(dir, source), databasePath(target, root))
-process.stdout.write('Restauración validada en data/' + target + '. Elegí ese nombre en REAC_DATABASE para abrirla.\n')
+process.stdout.write('Restauración validada en ' + target + '. Elegí ese nombre en REAC_DATABASE para abrirla.\n')

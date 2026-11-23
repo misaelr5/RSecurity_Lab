@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { regions, statuses, consentOptions, applicationTypes } from '../../../packages/core/src/constants.ts'
 import { api, today, when } from './client.ts'
 import type { Detail, Organization, Page } from './client.ts'
-import { Empty, Feedback, Field, Resource, Review, useAction, useResource, values } from './widgets.tsx'
+import { DownloadButton, Empty, Feedback, Field, Resource, Review, useAction, useResource, values } from './widgets.tsx'
 
 type Props = { revision: number; refresh: () => void; open: (path: string) => void }
 
@@ -21,7 +21,7 @@ export function Prospects({ revision, refresh, open, sourcesOnly = false }: Prop
     {!sourcesOnly && <div className="toolbar">
       <button className="primary" onClick={() => { setAdding(!adding); setImporting(false) }}>{adding ? 'Cerrar alta' : 'Nuevo prospecto'}</button>
       <button onClick={() => { setImporting(!importing); setAdding(false) }}>{importing ? 'Cerrar importación' : 'Importar CSV o JSON'}</button>
-      <a className="button" href="/api/v1/prospects/export">Exportar CSV</a><a className="button" href="/api/v1/prospects/export/json">Exportar JSON</a>
+      <DownloadButton path="/prospects/export" filename="reac-leads-v1.csv">Exportar CSV</DownloadButton><DownloadButton path="/prospects/export/json" filename="reac-prospectos-v1.json">Exportar JSON</DownloadButton>
     </div>}
     {adding && <ProspectForm busy={action.busy} onSave={(data) => void action.run(async () => {
       const org = await api<Organization>('/prospects', 'POST', data.prospect)
@@ -79,6 +79,7 @@ function ProspectForm({ item, busy, onSave }: { item?: Organization; busy: boole
     <Field label="Localidad" name="city" value={item?.city} required /><label className="field">Región<input name="region" list="known-prospect-regions" defaultValue={item?.region ?? 'Sin clasificar'} required maxLength={120} /><datalist id="known-prospect-regions">{regions.map((region) => <option value={region} key={region} />)}</datalist></label>
     <Field label="Tipo de aplicación" name="applicationType" value={item?.applicationType ?? 'Sin clasificar'} options={applicationTypes} />
     <Field label="Sitio web" name="website" value={item?.website} type="url" /><Field label="Contacto comercial" name="contact" value={item?.contact} />
+    <Field label="Uso del canal" name="contactPurpose" options={['Sin verificar', 'Comercial', 'Derivación']} value={item?.contactPurpose ?? 'Sin verificar'} />
     <Field label="Email comercial" name="email" value={item?.email} type="email" /><Field label="Teléfono comercial" name="phone" value={item?.phone} type="tel" />
     <Field label="URL de referencia" name="sourceUrl" value={item?.sourceUrl} type="url" /><Field label="Fecha de verificación" name="verifiedAt" value={item?.verifiedAt} type="date" />
     <Field label="Seguimiento" name="status" value={item?.status} options={statuses} /><Field label="Consentimiento" name="consent" value={item?.consent} options={consentOptions} />

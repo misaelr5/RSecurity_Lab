@@ -18,7 +18,8 @@ export const optionalDate = z.union([date, z.literal('')])
 export const instant = z.iso.datetime({ offset: true })
 export const prospect = z.strictObject({
   name: required(160), industry: required(120), city: required(120), region: required(120),
-  applicationType: z.enum(applicationTypes).optional(), website: optionalUrl.default(''), contact: text(160).default(''),
+  legalName: text(200).optional(), province: text(120).optional(), address: text(250).optional(), registrationId: text(80).optional(),
+  applicationType: z.enum(applicationTypes).optional(), contactPurpose: z.enum(['Comercial', 'Derivación', 'Sin verificar']).optional(), website: optionalUrl.default(''), contact: text(160).default(''),
   email: z.union([z.email(), z.literal('')]).default(''), phone: text(60).default(''),
   sourceUrl: optionalUrl.default(''), verifiedAt: optionalDate.default(''),
   status: z.enum(statuses).default('Nuevo'), consent: z.enum(consentOptions).default('Sin registro'),
@@ -30,12 +31,13 @@ export const source = z.strictObject({
   terms: text(350).default(''),
 })
 export type Source = z.output<typeof source>
-export const discoveryRecord = prospect.pick({ name: true, industry: true, city: true, region: true, website: true, contact: true, email: true, phone: true }).extend({
+export const discoveryRecord = prospect.pick({ name: true, legalName: true, province: true, address: true, registrationId: true, industry: true, city: true, region: true, website: true, contact: true, contactPurpose: true, email: true, phone: true }).extend({
   website: url, applicationType: z.enum(applicationTypes).exclude(['Sin clasificar']),
   evidence: source, corroboration: source.optional(), opportunity: required(500),
-  technologies: z.array(required(100)).max(5).default([]),
-})
-export const discoveryFile = z.strictObject({ version: z.literal(1), records: z.array(discoveryRecord).min(1).max(30) })
+  confidence: z.enum(['ALTA', 'MEDIA', 'BAJA']).default('MEDIA'),
+  technologies: z.array(z.strictObject({ name: required(100), source: z.enum(['principal', 'corroboracion']) })).max(5).default([]),
+}).refine((entry) => Boolean(entry.corroboration) || !entry.technologies.some((tech) => tech.source === 'corroboracion'), { path: ['technologies'], message: 'Agregá la fuente de corroboración de la tecnología.' })
+export const discoveryFile = z.strictObject({ version: z.literal(1), records: z.array(discoveryRecord).min(1).max(100) })
 
 export const publicAsset = z.strictObject({
   sourceId: id, kind: z.enum(assetKinds), value: required(300), status: z.enum(assetStates),

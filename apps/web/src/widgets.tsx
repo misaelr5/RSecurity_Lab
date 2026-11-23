@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { api } from './client.ts'
+import { api, download } from './client.ts'
 
 export function useResource<T>(path: string, revision: number) {
   const [result, setResult] = useState<{ path: string; value?: T; error?: string }>()
@@ -65,3 +65,10 @@ export function Review({ label, busy, onReview, acknowledgement = 'Confirmo que 
   </form>
 }
 
+export function DownloadButton({ path, filename, children, primary }: { path: string; filename: string; children: ReactNode; primary?: boolean }) {
+  const action = useAction(() => {})
+  return <>
+    <button className={primary ? 'primary' : undefined} disabled={action.busy} onClick={() => void action.run(() => download(path, filename), '')}>{children}</button>
+    {action.error && <span role="alert" className="error">{action.error}</span>}
+  </>
+}

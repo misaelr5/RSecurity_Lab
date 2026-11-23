@@ -1,6 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { resolve } from 'node:path'
 
+test.beforeEach(async ({ page }) => {
+  await page.goto('/')
+  await page.getByLabel('Clave local').fill('clave-sintetica-de-pruebas-e2e')
+  await page.getByRole('button', { name: 'Iniciar sesión' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+})
+
 test('cartera desde CSV, aprobación manual, fixture e informe en Chrome', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -25,7 +32,7 @@ test('cartera desde CSV, aprobación manual, fixture e informe en Chrome', async
   await page.getByRole('link', { name: 'Ver informe' }).click()
   await expect(page.getByText('Borrador', { exact: true })).toBeVisible()
   const downloading = page.waitForEvent('download')
-  await page.getByRole('link', { name: 'Descargar HTML' }).click()
+  await page.getByRole('button', { name: 'Descargar HTML' }).click()
   expect((await downloading).suggestedFilename()).toBe('reac-informe-v1.html')
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('link', { name: 'Dashboard' }).click()
@@ -54,4 +61,26 @@ test('importa y revisa evidencia defensiva documental', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Imprimir o guardar PDF' })).toBeHidden()
   const file = await page.pdf({ format: 'A4' })
   expect(file.subarray(0, 5).toString()).toBe('%PDF-')
+})
+
+test('descubrimiento, evidencia, prioridad, borrador y CRM desde la interfaz', async ({ page }) => {
+  await page.getByRole('link', { name: 'Descubrimiento' }).click()
+  await page.getByLabel('Archivo de investigación JSON').setInputFiles(resolve('fixtures/investigacion-demo.json'))
+  await page.getByRole('button', { name: 'Previsualizar investigación' }).click()
+  await expect(page.getByText(/sucursal ficticia/)).toBeVisible()
+  await page.getByLabel('Responsable de la revisión').fill('Operador QA')
+  await page.getByLabel('Verifiqué fuentes, canales públicos y atribución.').check()
+  await page.getByRole('button', { name: 'Incorporar fichas verificadas' }).click()
+  await page.getByRole('link', { name: 'Prospectos' }).click()
+  await page.getByLabel('Tipo de aplicación').selectOption('Comercio electrónico')
+  await page.getByRole('link', { name: 'Comercio Ficticio' }).click()
+  await expect(page.getByRole('heading', { name: 'Prioridad comercial' })).toBeVisible()
+  await page.getByRole('button', { name: 'Crear borrador', exact: true }).click()
+  await expect(page.getByRole('paragraph').filter({ hasText: /En su sitio vi lo siguiente/ })).toBeVisible()
+  await page.getByRole('link', { name: 'Descubrimiento' }).click()
+  await page.getByRole('button', { name: 'Previsualizar para Reac Leads' }).click()
+  await expect(page.getByText('Comercio → Otro · Sin borrador aprobado')).toBeVisible()
+  const file = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Descargar CSV para Reac Leads' }).click()
+  expect((await file).suggestedFilename()).toBe('reac-leads-v1.csv')
 })

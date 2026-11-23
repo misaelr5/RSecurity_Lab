@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, renameSync, rmSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 
-export const schemaVersion = 2
-type Table = 'organizations' | 'contacts' | 'engagements' | 'public_sources' | 'observations' | 'outreach_drafts' | 'authorizations' | 'scope_assets' | 'audit_runs' | 'findings' | 'evidence_refs' | 'activity_log' | 'report_reviews' | 'public_assets' | 'pipeline_events'
+export const schemaVersion = 3
+type Table = 'organizations' | 'contacts' | 'engagements' | 'public_sources' | 'observations' | 'outreach_drafts' | 'authorizations' | 'scope_assets' | 'audit_runs' | 'findings' | 'evidence_refs' | 'activity_log' | 'report_reviews' | 'public_assets' | 'pipeline_events' | 'research_jobs' | 'research_candidates'
 type Row<T> = T & { id: string; parent: string | null; createdAt: string; updatedAt: string }
 
 const relations: Record<Table, Table | null> = {
@@ -13,19 +13,21 @@ const relations: Record<Table, Table | null> = {
   authorizations: 'engagements', scope_assets: 'authorizations', audit_runs: null,
   findings: 'audit_runs', evidence_refs: 'audit_runs', activity_log: null, report_reviews: null,
   public_assets: 'public_sources', pipeline_events: 'engagements',
+  research_jobs: null, research_candidates: 'research_jobs',
 }
 
 const versionTwo: Table[] = ['public_assets', 'pipeline_events']
+const versionThree: Table[] = ['research_jobs', 'research_candidates']
 const tables = Object.keys(relations) as Table[]
-export const tablesForVersion = (version: number) => version === 1 ? tables.filter((table) => !versionTwo.includes(table)) : tables
+export const tablesForVersion = (version: number) => tables.filter((table) => (version >= 2 || !versionTwo.includes(table)) && (version >= 3 || !versionThree.includes(table)))
 
 export function openStore(path: string) {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA busy_timeout=2000; PRAGMA foreign_keys=ON;')
   try {
     const version = db.prepare('PRAGMA user_version').get()?.user_version
-    if (version !== 0 && version !== 1 && version !== schemaVersion) throw new Error('Versión de SQLite incompatible.')
-    if (version === 1 && path !== ':memory:') {
+    if (version !== 0 && version !== 1 && version !== 2 && version !== schemaVersion) throw new Error('Versión de SQLite incompatible.')
+    if (version > 0 && version < schemaVersion && path !== ':memory:') {
       const dir = resolve(dirname(path), 'backups', basename(path).toLowerCase())
       mkdirSync(dir, { recursive: true })
       const output = resolve(dir, 'reac-backup-' + randomUUID() + '.sqlite')
@@ -42,7 +44,7 @@ export function openStore(path: string) {
       db.exec('BEGIN IMMEDIATE')
       try {
         const lockedVersion = db.prepare('PRAGMA user_version').get()?.user_version
-        const pending = lockedVersion === 0 ? tables : lockedVersion === 1 ? versionTwo : []
+        const pending = lockedVersion === 0 ? tables : lockedVersion === 1 ? [...versionTwo, ...versionThree] : lockedVersion === 2 ? versionThree : []
         for (const table of pending) {
           const parent = relations[table]
           db.exec('CREATE TABLE ' + table + ' (id TEXT PRIMARY KEY NOT NULL, parent TEXT ' +
@@ -50,7 +52,7 @@ export function openStore(path: string) {
             ', unique_key TEXT UNIQUE, data TEXT NOT NULL CHECK(json_valid(data)), created TEXT NOT NULL, updated TEXT NOT NULL) STRICT;')
           if (parent) db.exec('CREATE INDEX ' + table + '_parent ON ' + table + '(parent);')
         }
-        db.exec('PRAGMA user_version = 2; COMMIT;')
+        db.exec('PRAGMA user_version = 3; COMMIT;')
       } catch (error) {
         db.exec('ROLLBACK')
         throw error

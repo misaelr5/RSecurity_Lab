@@ -5,6 +5,8 @@ import { readdir, lstat } from 'node:fs/promises'
 import { z } from '@reac/core'
 import { openStore, schemaVersion } from './store.ts'
 import { registerDefensiveReviews } from './defensive-reviews.ts'
+import { registerResearch } from './research.ts'
+import type { AIProvider } from './ai-provider.ts'
 import { registerPipeline } from './pipeline.ts'
 import { registerPublicAssets } from './public-assets.ts'
 import { registerPortfolio } from './portfolio.ts'
@@ -16,7 +18,7 @@ import type { Operator } from './operator.ts'
 import type { Prospect } from '@reac/core'
 import { backupName, createBackup } from './backups.ts'
 
-type Options = { database: string; fixturePort: number; port: number; bundle?: string; backupDir?: string; logger?: boolean; operator?: Operator }
+type Options = { database: string; fixturePort: number; port: number; bundle?: string; backupDir?: string; logger?: boolean; operator?: Operator; privateStorage?: boolean; aiProvider?: AIProvider }
 const tools = ['Subfinder', 'WappalyzerGo', 'MDN HTTP Observatory', 'HTTPx', 'Nuclei', 'OWASP ZAP', 'OSV-Scanner', 'Semgrep', 'Gitleaks', 'Juice Shop', 'Trivy']
 
 export function createApp(options: Options) {
@@ -52,11 +54,12 @@ export function createApp(options: Options) {
   })
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ message: 'Ruta inexistente.' }))
 
-  registerOperator(app, options.port, options.operator)
+  registerOperator(app, options.operator)
   const portfolio = registerPortfolio(app, store)
   const audits = registerAudits(app, store, options.fixturePort)
   const assets = registerPublicAssets(app, store)
   registerPipeline(app, store)
+  registerResearch(app, store, portfolio, options.aiProvider)
   registerDefensiveReviews(app, store)
   registerReports(app, store, portfolio, audits, assets)
   app.get('/api/health', () => {
@@ -64,7 +67,7 @@ export function createApp(options: Options) {
     return { status: 'PASS', storage: 'SQLite', schema: schemaVersion }
   })
   app.get('/api/settings', () => ({
-    version: '0.1.0', database: basename(options.database), fixture: audits.tool,
+    version: '0.1.0', privateStorage: options.privateStorage === true, database: basename(options.database), fixture: audits.tool,
     limits: { csvRows: 1500, requestBytes: 1048576, labRequestsPerSecond: 1, labConcurrency: 1, labTimeoutMs: 2000 },
     tools: tools.map((name) => ({ name, status: 'NO DISPONIBLE EN LA APP' })),
   }))

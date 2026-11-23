@@ -67,3 +67,14 @@ Las autorizaciones guardan una referencia documental declarada por el operador. 
 El laboratorio conserva la comprobación HTTP de destino fijo. Los resultados SAST, SCA y de secretos se admiten únicamente como resúmenes inertes en formato v1. No se incorporaron ejecutores de DAST, ni adaptadores nativos o proveedores OSINT de red. El piloto con empresas reales sigue pendiente. La demo contiene exclusivamente datos ficticios. Antes de uso con datos reales quedan pendientes autenticación, acceso y retención operativa y el proveedor pasivo. El perfil sigue siendo de un operador en una máquina de confianza.
 
 No se modificó Reac Leads, no se enviaron comunicaciones y no se publicaron cambios.
+
+## Ciclo de prospección comercial
+
+- Se aplicó review-agent al árbol existente. Los hallazgos se registraron en AUDITORIA_PROSPECCION.md. Tres subagentes aportaron fichas verificadas, matriz de proveedores y pulido visual. Los cambios se integraron sin sobrescribir el trabajo previo.
+- Perfil privado Windows, verificador scrypt, recuperación DPAPI, sesión única mediante autorización de mismo origen, límites de intentos y cierre de sesión. ACL verificada para propietario, SYSTEM y administradores. El cifrado del volumen quedó sin comprobar. Política de revisión de fuentes a 180 días y copias a 90 días. La eliminación requiere decisión del operador.
+- Directorios de Villa Dolores, Nono, Turismo de Córdoba e Innovab integrados como navegación manual. Lote JSON v1 con vista previa y confirmación. No se configuraron proveedores pagos ni automatización sobre terceros.
+- Piloto independiente en 127.0.0.1:4324 con diez empresas: dos de Villa Dolores, cuatro de Traslasierra y cuatro de Córdoba Capital. Se comprobaron diez observaciones revisadas y diez borradores pendientes, con información empresarial y canales ya publicados. Mercado Pago se registró como mención de la fuente de TraslaMarket.
+- CSV de traslado probado contra el importador original de Reac Leads de forma local y descartable. Diez aceptadas en la primera importación y diez duplicadas en la segunda. El piloto conserva los borradores pendientes fuera del CSV.
+- Verificación final: npm run lint, npm test (17/17), npm run build (TypeScript y Vite), npm run smoke y npm run test:e2e (3/3 Chrome). npm audit: cero vulnerabilidades conocidas. Restauración de piloto: diez fichas y diez borradores. Chrome autenticado confirmó el piloto final. El código y las pruebas están en el árbol local.
+
+El dossier, el CSV y las dos capturas del piloto se guardan en la carpeta privada. Las fichas de la demo permanecen independientes. No se enviaron comunicaciones, no se escanearon terceros y no se hicieron cambios remotos.

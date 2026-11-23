@@ -1,3 +1,4 @@
+import { scryptSync } from 'node:crypto'
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import assert from 'node:assert/strict'
@@ -9,13 +10,14 @@ import type { RequestListener } from 'node:http'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createApp } from '../apps/api/src/app.ts'
 import { restoreBackup } from '../apps/api/src/backups.ts'
+import type { Operator } from '../apps/api/src/operator.ts'
 import { openStore } from '../apps/api/src/store.ts'
 import { backupDirectory } from '../apps/api/src/storage-paths.ts'
 import { startFixture } from '../fixtures/lab.ts'
 
-async function setup(t: TestContext, handler?: RequestListener, backupDir?: string) {
+async function setup(t: TestContext, handler?: RequestListener, backupDir?: string, operator?: Operator) {
   const fixture = await startFixture(handler)
-  const app = createApp({ database: ':memory:', port: 4310, fixturePort: fixture.port, backupDir })
+  const app = createApp({ database: ':memory:', port: 4310, fixturePort: fixture.port, backupDir, operator })
   t.after(async () => { await app.close(); await fixture.close() })
   const send = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, body?: object) => app.inject({
     method, url, headers: { host: '127.0.0.1:4310', ...(method === 'GET' ? {} : { 'content-type': 'application/json' }) },
@@ -28,7 +30,7 @@ const human = { reviewer: 'Operador de prueba', acknowledge: true }
 
 test('flujo pasivo: CSV, edición, filtros, fuentes, mensaje, informe y exclusión', async (t) => {
   const { send } = await setup(t)
-  assert.equal((await send('GET', '/api/v1/health')).json().schema, 2)
+  assert.equal((await send('GET', '/api/v1/health')).json().schema, 3)
   assert.equal((await send('GET', '/api/dashboard')).json().total, 0)
   const csv = await readFile(new URL('../fixtures/prospectos-demo.csv', import.meta.url), 'utf8')
   assert.equal((await send('POST', '/api/prospects/import', { version: 1, csv })).json().imported, 3)
@@ -61,7 +63,7 @@ test('flujo pasivo: CSV, edición, filtros, fuentes, mensaje, informe y exclusi�
   const whatsapp = (await send('POST', path + '/drafts', { channel: 'WhatsApp' })).json()
   assert.equal(whatsapp.channel, 'WhatsApp')
   assert.match(whatsapp.body, /coordinar una charla breve/)
-  assert.equal((await send('GET', path + '/score?site=100&source=0&contact=0')).json().score, 100)
+  assert.equal((await send('GET', path + '/score?site=100&source=0&contact=0&application=0')).json().score, 100)
   const draftPath = '/api/drafts/' + draft.id
   assert.ok((await send('POST', draftPath + '/review', { ...human, contentVersion: draft.contentVersion })).json().reviewedAt)
   assert.equal((await send('PUT', draftPath, { subject: 'Edición', body: 'Consulta comercial' })).json().reviewedAt, undefined)
@@ -265,11 +267,11 @@ test('migración SQLite de v1 a v2 preserva datos y genera respaldo anterior res
   try {
     const original = openStore(path)
     const org = original.insert('organizations', prospect)
-    original.db.exec('DROP TABLE public_assets; DROP TABLE pipeline_events; PRAGMA user_version=1;')
+    original.db.exec('DROP TABLE research_candidates; DROP TABLE research_jobs; DROP TABLE public_assets; DROP TABLE pipeline_events; PRAGMA user_version=1;')
     original.db.close()
     const upgraded = openStore(path)
     try {
-      assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, 2)
+      assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, 3)
       assert.equal(upgraded.find<{ name: string }>('organizations', org.id)?.name, prospect.name)
       assert.equal(upgraded.count('public_assets'), 0)
     } finally { upgraded.db.close() }
@@ -311,4 +313,42 @@ test('importación defensiva inerte, revisión versionada e informe con historia
   assert.match(report.body, /Expediente sintético|sintético/)
   assert.match(report.body, /Revisión defensiva/)
   assert.equal((await send('GET', '/api/dashboard')).json().lab, 0)
+})
+
+test('sesión monousuario protege archivos, exige clave y se invalida con logout', async (t) => {
+  const key = 'clave-sintetica-api-autoridad-local'
+  const salt = '46'.repeat(16)
+  const { app, send } = await setup(t, undefined, undefined, { salt, hash: scryptSync(key, Buffer.from(salt, 'hex'), 64).toString('hex') })
+  assert.equal((await send('GET', '/api/v1/prospects/export')).statusCode, 401)
+  assert.equal((await send('POST', '/api/v1/operator/login', { key: 'incorrecta-sintetica-de-prueba' })).statusCode, 401)
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/operator/login', headers: { host: '127.0.0.1:4310', origin: 'http://127.0.0.1:9999', 'content-type': 'application/json' }, payload: { key } })).statusCode, 403)
+  const login = await send('POST', '/api/v1/operator/login', { key })
+  assert.equal(login.statusCode, 200)
+  assert.equal(login.headers['set-cookie'], undefined)
+  assert.match(login.json().sessionToken, /^[a-f0-9]{64}$/)
+  const headers = { host: '127.0.0.1:4310', authorization: 'Bearer ' + login.json().sessionToken, 'content-type': 'application/json' }
+  assert.equal((await app.inject({ url: '/api/v1/retention', headers })).statusCode, 200)
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/operator/logout', headers, payload: {} })).statusCode, 200)
+  assert.equal((await app.inject({ url: '/api/v1/prospects/export', headers })).statusCode, 401)
+})
+
+test('descubrimiento manual exige confirmación, conserva duplicados y enlaza transferencia CRM', async (t) => {
+  const { send } = await setup(t)
+  const file = JSON.parse(await readFile(new URL('../fixtures/investigacion-demo.json', import.meta.url), 'utf8'))
+  const preview = await send('POST', '/api/discovery/preview', file)
+  assert.equal(preview.json()[0].duplicate, false)
+  assert.equal((await send('GET', '/api/prospects')).json().total, 0)
+  assert.equal((await send('POST', '/api/discovery/import', { file, ...human, acknowledge: false })).statusCode, 400)
+  const result = (await send('POST', '/api/discovery/import', { file, ...human })).json()
+  assert.equal(result.imported, 1)
+  const [orgId] = result.ids
+  assert.equal((await send('POST', '/api/discovery/import', { file, ...human })).json().duplicates, 1)
+  assert.equal((await send('GET', '/api/prospects?region=Villa+Dolores&industry=Comercio&applicationType=Comercio+electr%C3%B3nico')).json().total, 1)
+  assert.equal((await send('GET', '/api/prospects?applicationType=Reservas')).json().total, 0)
+  const draft = (await send('POST', '/api/prospects/' + orgId + '/drafts')).json()
+  assert.match(draft.body, /retiro de pedidos web/)
+  assert.doesNotMatch((await send('GET', '/api/prospects/export?mode=handoff')).body, /retiro de pedidos web/)
+  assert.equal((await send('POST', '/api/drafts/' + draft.id + '/review', { ...human, contentVersion: draft.contentVersion })).statusCode, 200)
+  assert.match((await send('GET', '/api/prospects/export?mode=handoff')).body, /retiro de pedidos web/)
+  assert.equal((await send('GET', '/api/crm/preview')).json()[0].crmIndustry, 'Otro')
 })

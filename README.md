@@ -10,10 +10,12 @@ Requiere Node 24.14 o superior dentro de la serie 24 y npm. Para los tests E2E s
 Set-Location 'D:\Reac_Security_Lab_Kit\reac-security-lab'
 npm ci --ignore-scripts
 npm run build
+# Solo la primera vez, si todavía no existe el operador:
+.\scripts\operator.ps1
 npm start
 ~~~
 
-Abrí http://127.0.0.1:4310/. La primera ejecución crea `data/reac.sqlite`. El comando `npm run dev` vuelve a generar el bundle antes de iniciar. Para elegir otro puerto o archivo, copiá `.env.example` a `.env` y ajustá sus valores. El servidor y el fixture escuchan en loopback.
+Abrí http://127.0.0.1:4310/. Sin configuración de almacenamiento, conserva el directorio `data/` y el nombre `reac.sqlite`. Para entrar, ejecutá `.\scripts\operator.ps1 -CopyKey` y pegá la clave en el navegador. Limpiá luego el portapapeles. El comando `npm run dev` vuelve a generar el bundle antes de iniciar. Para elegir otro puerto o archivo, copiá `.env.example` a `.env` y ajustá sus valores. El servidor y el fixture escuchan en loopback.
 
 ### Demo con datos ficticios
 
@@ -21,6 +23,8 @@ En una terminal:
 
 ~~~powershell
 $env:REAC_PORT = '4320'
+$env:REAC_DEMO = '1'
+$env:REAC_STORAGE = 'workspace'
 $env:REAC_DATABASE = 'reac-demo.sqlite'
 npm start
 ~~~
@@ -33,12 +37,25 @@ node scripts/seed-demo.ts
 
 Abrí http://127.0.0.1:4320/. Si preferís probar el importador, usá `fixtures/prospectos-demo.csv` desde una base vacía. El menú Prospectos intercambia CSV con Reac Leads y JSON v1 entre instalaciones de Security Lab. Las empresas y las fuentes `.example` de la demo son ficticias.
 
+## Piloto comercial protegido
+
+~~~powershell
+$env:REAC_PORT = '4324'
+$env:REAC_STORAGE = 'private'
+$env:REAC_DATABASE = 'reac-prospeccion.sqlite'
+$env:REAC_DEMO = '0'
+npm start
+~~~
+
+Abrí http://127.0.0.1:4324/. La base y los archivos del piloto se guardan bajo `%LOCALAPPDATA%\ReacStudio\SecurityLab`. Ver [Custodia y retención](docs/SEGURIDAD.md).
+
 ## Recorrido
 
 | Vista | Ruta | Flujo |
 | --- | --- | --- |
 | Dashboard | `/#dashboard` | Conteos derivados de SQLite y actividad |
-| Prospectos | `/#prospects` | Alta, edición, eliminación con restricciones, filtros, CSV/JSON y borradores comerciales |
+| Prospectos | `/#prospects` | Alta, edición, filtros por región, rubro y tipo de aplicación, prioridad y borradores |
+| Descubrimiento | `/#discovery` | Directorios públicos, importación con revisión previa y traslado a Reac Leads |
 | Evidencia pública | `/#evidence` | Fuentes, observaciones y activos OSINT públicos registrados de forma manual |
 | Auditorías | `/#audits` | Autorizaciones versionadas, fixture, cancelación y revisión defensiva de archivos |
 | Informes | `/#reports` | Acceso desde fichas y corridas, revisión, descarga MD/HTML/CSV e impresión a PDF |

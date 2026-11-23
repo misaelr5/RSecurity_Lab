@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, when } from './client.ts'
 import type { Audit, AuditDetail, Authorization, Organization, Page, Report, Settings } from './client.ts'
-import { Empty, Feedback, Field, Resource, Review, useAction, useResource, values } from './widgets.tsx'
+import { DownloadButton, Empty, Feedback, Field, Resource, Review, useAction, useResource, values } from './widgets.tsx'
 
 type Props = { revision: number; refresh: () => void }
 
@@ -179,7 +179,7 @@ function ReportView({ path, revision, refresh }: Props & { path: string }) {
   return <><Feedback state={action} /><Resource result={result}>{(report) => <section className="panel report">
     <p className="print-brand">Reac Studio · Documento confidencial</p>
     <div className="profile"><h2>{report.title}</h2><span className="tag">{report.reviewedAt ? 'Revisado' : 'Borrador'}</span></div>
-    <div className="toolbar">{['md', 'html', 'csv'].map((format) => <a className="button" key={format} href={'/api/v1' + path + '/export/' + format}>Descargar {format.toUpperCase()}</a>)}<button onClick={() => window.print()}>Imprimir o guardar PDF</button></div>
+    <div className="toolbar">{['md', 'html', 'csv'].map((format) => <DownloadButton key={format} path={path + '/export/' + format} filename={'reac-informe-v1.' + format}>Descargar {format.toUpperCase()}</DownloadButton>)}<button onClick={() => window.print()}>Imprimir o guardar PDF</button></div>
     {report.sections.map((section) => <div key={section.title}><h3>{section.title}</h3><ul>{section.lines.map((line, index) => <li key={index}>{line}</li>)}</ul></div>)}
     {report.reviewedAt ? <p className="notice">Revisado por {report.reviewer} · {when(report.reviewedAt)}</p>
       : <Review label="Marcar informe como revisado" busy={action.busy} onReview={(payload) => void action.run(() => api(path + '/review', 'POST', { ...payload, contentVersion: report.contentVersion }), 'Revisión del informe registrada.')} />}

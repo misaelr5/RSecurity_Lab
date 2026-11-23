@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 import { startFixture } from '../../../fixtures/lab.ts'
 import { createApp } from './app.ts'
+import { CodexCLIProvider } from './ai-provider.ts'
 import { readOperator } from './operator.ts'
 
 const port = Number(process.env.REAC_PORT ?? '4310')
@@ -15,11 +16,14 @@ const filename = process.env.REAC_DATABASE ?? 'reac.sqlite'
 const database = databasePath(filename, root)
 const demo = process.env.REAC_DEMO === '1'
 if (demo && (filename !== 'reac-demo.sqlite' || process.env.REAC_STORAGE === 'private')) throw new Error('REAC_DEMO solo se admite con reac-demo.sqlite en el workspace.')
-const operator = demo ? undefined : readOperator(readFileSync(resolve(privateRoot(), 'operator.json'), 'utf8'))
+const operatorFile = demo ? undefined : resolve(privateRoot(), 'operator.json')
+if (operatorFile && !existsSync(operatorFile)) throw new Error('Prepará el operador con scripts/operator.ps1 antes de iniciar.')
+const operator = operatorFile ? readOperator(readFileSync(operatorFile, 'utf8')) : undefined
 const fixture = await startFixture()
 let app: ReturnType<typeof createApp>
 try {
-  app = createApp({ database, port, fixturePort: fixture.port, bundle, backupDir: backupDirectory(filename, root), logger: true, operator })
+  app = createApp({ database, port, fixturePort: fixture.port, bundle, backupDir: backupDirectory(filename, root), logger: true, operator, privateStorage: process.env.REAC_STORAGE === 'private',
+    aiProvider: process.env.REAC_CODEX_ENABLED === '1' ? new CodexCLIProvider() : undefined })
 } catch (error) {
   await fixture.close()
   throw error

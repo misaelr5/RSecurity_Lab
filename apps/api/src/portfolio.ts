@@ -7,7 +7,7 @@ import type { Store } from './store.ts'
 import { problem, parse, must, attach } from './http.ts'
 import { authorizationState } from './audits.ts'
 
-type StoredProspect = Prospect & { original?: CrmRow; origin: string }
+type StoredProspect = Prospect & { original?: CrmRow; origin: string; campaignId?: string; responsible?: string; confidence?: string }
 const portable = z.strictObject({
   version: z.literal(1),
   prospects: z.array(z.strictObject({
@@ -71,11 +71,12 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     const filters = parse(z.strictObject({
       q: z.string().max(120).optional(), region: prospect.shape.region.optional(),
       industry: z.string().max(120).optional(), applicationType: z.enum(applicationTypes).optional(), status: z.enum(statuses).optional(),
-      page: z.coerce.number().int().min(1).max(10000).default(1),
+      campaign: id.optional(), page: z.coerce.number().int().min(1).max(10000).default(1),
     }), request.query)
     const filtered = store.list<StoredProspect>('organizations').filter((item) =>
       (!filters.region || normalize(item.region) === normalize(filters.region)) &&
       (!filters.status || item.status === filters.status) &&
+      (!filters.campaign || item.campaignId === filters.campaign) &&
       (!filters.applicationType || (item.applicationType ?? 'Sin clasificar') === filters.applicationType) &&
       (!filters.industry || normalize(item.industry).includes(normalize(filters.industry))) &&
       (!filters.q || normalize([item.name, item.city, item.website, item.contact].join(' ')).includes(normalize(filters.q))))
@@ -93,34 +94,36 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
   }
   app.post('/api/discovery/preview', (request) => previewDiscovery(parse(discoveryFile, request.body)))
   app.post('/api/discovery/import', (request, reply) => store.transaction(() => {
-    const { file, reviewer, acknowledge } = parse(z.strictObject({ file: discoveryFile, reviewer: review.shape.reviewer, acknowledge: review.shape.acknowledge }), request.body)
-    if (!acknowledge) throw problem(400, 'Confirmá la verificación de fuentes.')
+    const { file, reviewer } = parse(z.strictObject({ file: discoveryFile, reviewer: review.shape.reviewer, acknowledge: review.shape.acknowledge }), request.body)
     const outcomes = previewDiscovery(file)
-    const ids: string[] = []
-    file.records.forEach((item, index) => {
-      if (outcomes[index].duplicate) return
-      const { evidence, corroboration, opportunity, technologies, ...candidate } = item
+    const ids = file.records.flatMap((item, index) => outcomes[index].duplicate ? [] : [addDiscovery(item, reviewer)])
+    return reply.code(201).send({ imported: ids.length, duplicates: file.records.length - ids.length, ids })
+  }))
+  function addDiscovery(item: z.output<typeof discoveryFile>['records'][number], reviewer: string, campaignId?: string) {
+      const { evidence, corroboration, opportunity, technologies, confidence, ...candidate } = item
       const { org, engagement } = create(prospect.parse({ ...candidate, verifiedAt: evidence.consultedAt, status: 'Verificar' }))
-      store.update('organizations', org.id, { ...org, sourceUrl: evidence.url, origin: 'DESCUBRIMIENTO_MANUAL_V1' })
+      store.update('organizations', org.id, { ...org, sourceUrl: evidence.url, origin: campaignId ? 'INVESTIGACION_V3' : 'DESCUBRIMIENTO_MANUAL_V1', campaignId, responsible: reviewer, confidence })
       const primary = store.insert('public_sources', manualSource.capture(evidence), org.id)
-      if (corroboration) store.insert('public_sources', manualSource.capture(corroboration), org.id)
+      const secondary = corroboration ? store.insert('public_sources', manualSource.capture(corroboration), org.id) : undefined
       store.insert<Note>('observations', {
         sourceId: primary.id, title: 'Función digital publicada', category: 'Función comercial publicada', statement: evidence.statement,
-        level: 'OBSERVACION_PUBLICA', severity: 'INFORMATIVA', confidence: 'MEDIA',
+        level: 'OBSERVACION_PUBLICA', severity: 'INFORMATIVA', confidence,
         impact: 'La función documentada puede orientar una conversación comercial.',
         limitations: 'Alcance documental. Se observó lo publicado por la fuente.', recommendation: opportunity,
         reviewer, reviewedAt: new Date().toISOString(),
       }, primary.id)
       store.insert('public_assets', { sourceId: primary.id, kind: 'Dominio', value: new URL(org.website).hostname,
         status: 'Confirmado con fuente', collectedAt: evidence.consultedAt, confidence: 'ALTA', note: 'Dominio oficial consignado en la ficha de descubrimiento.' }, primary.id)
-      for (const value of new Set(technologies)) store.insert('public_assets', { sourceId: primary.id, kind: 'Tecnología', value,
-        status: 'Confirmado con fuente', collectedAt: evidence.consultedAt, confidence: 'MEDIA', note: 'Integración nombrada en la fuente pública.' }, primary.id)
+      for (const tech of technologies) {
+        const attributed = tech.source === 'corroboracion' ? must(secondary) : primary
+        store.insert('public_assets', { sourceId: attributed.id, kind: 'Tecnología', value: tech.name,
+          status: 'Confirmado con fuente', collectedAt: attributed.consultedAt, confidence: 'MEDIA', note: 'Integración nombrada por la fuente pública.' }, attributed.id)
+      }
       store.insert('pipeline_events', { stage: 'Verificado', note: 'Ficha y fuente revisadas para el piloto.', service: opportunity }, engagement.id)
       store.log('Investigación comercial incorporada', org.id)
-      ids.push(org.id)
-    })
-    return reply.code(201).send({ imported: ids.length, duplicates: file.records.length - ids.length, ids })
-  }))
+      if (campaignId) createDraft(org.id, 'Email')
+      return org.id
+  }
   app.post('/api/prospects', (request, reply) => reply.code(201).send(store.transaction(() => create(parse(prospect, request.body)).org)))
   app.get<{ Params: { id: string } }>('/api/prospects/:id', (request) => {
     const org = get(request.params.id)
@@ -149,7 +152,7 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
       }
     }
     store.log('Prospecto actualizado', org.id)
-    return store.update<StoredProspect>('organizations', org.id, { ...dto.prospect, original: org.original, origin: org.origin }, key)
+    return store.update<StoredProspect>('organizations', org.id, { ...org, ...dto.prospect, original: org.original, origin: org.origin }, key)
   }))
   app.delete<{ Params: { id: string } }>('/api/prospects/:id', (request, reply) => store.transaction(() => {
     const org = get(request.params.id)
@@ -219,7 +222,7 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     }
     return attach(reply, 'reac-prospectos-v1.json', 'application/json; charset=utf-8', body)
   })
-  function handoff(item: StoredProspect) {
+  function handoff(item: StoredProspect & { id: string }) {
     const blocked = optedOut(item)
     const approved = !blocked && store.list<Draft>('outreach_drafts', item.id).find((draft) => draft.reviewedAt)
     return { id: item.id, name: item.name, blocked, crmIndustry: crmIndustries.includes(item.industry) ? item.industry : 'Otro', approved: Boolean(approved), message: approved ? approved.body : '' }
@@ -248,15 +251,15 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     const weight = z.coerce.number().int().min(0).max(100)
     const weights = parse(z.strictObject({ site: weight.default(20), contact: weight.default(20), source: weight.default(35), application: weight.default(25) }), request.query)
     const signals = [
-      { label: 'Aplicación con transacciones, reservas o gestión', weight: weights.application, present: ['Comercio electrónico', 'Marketplace', 'Reservas', 'Software de gestión', 'Portal de clientes'].includes(item.applicationType ?? '') },
-      { label: 'Sitio oficial registrado', weight: weights.site, present: Boolean(item.website) },
-      { label: 'Canal comercial publicado registrado', weight: weights.contact, present: Boolean(item.email || item.phone || item.contact) },
-      { label: 'Fuente pública con fecha y evidencia revisada', weight: weights.source, present: notesFor(item.id).some((note) => note.level === 'OBSERVACION_PUBLICA' && Boolean(note.reviewedAt)) },
+      { label: 'Tipo de aplicación publicado', weight: weights.application, factor: ['Marketplace', 'Comercio electrónico', 'Software de gestión', 'Portal de clientes'].includes(item.applicationType ?? '') ? 1 : item.applicationType === 'Reservas' ? 0.7 : 0, detail: item.applicationType ?? 'Sin clasificar' },
+      { label: 'Sitio oficial registrado', weight: weights.site, factor: item.website ? 1 : 0, detail: item.website ? 'Registrado' : 'Pendiente' },
+      { label: 'Canal público de contacto', weight: weights.contact, factor: item.email || item.phone || item.contact ? (item.contactPurpose === 'Derivación' ? 0.6 : 1) : 0, detail: item.contactPurpose ?? (item.email || item.phone || item.contact ? 'Canal registrado' : 'Pendiente') },
+      { label: 'Evidencia pública revisada', weight: weights.source, factor: notesFor(item.id).some((note) => note.level === 'OBSERVACION_PUBLICA' && Boolean(note.reviewedAt)) ? 1 : 0, detail: 'Fuente atribuida y revisada' },
     ]
     const total = signals.reduce((sum, signal) => sum + signal.weight, 0)
     if (!total) throw problem(400, 'Asigná peso a por lo menos una señal.')
-    const score = optedOut(item) ? null : Math.round(signals.reduce((sum, signal) => sum + (signal.present ? signal.weight : 0), 0) * 100 / total)
-    return { score, signals }
+    const score = optedOut(item) ? null : Math.round(signals.reduce((sum, signal) => sum + signal.factor * signal.weight, 0) * 100 / total)
+    return { score, signals: signals.map((signal) => ({ ...signal, present: signal.factor > 0 })) }
   })
   app.post<{ Params: { id: string } }>('/api/prospects/:id/sources', (request, reply) => store.transaction(() => {
     const org = get(request.params.id)
@@ -283,8 +286,12 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     const org = get(request.params.id)
     if (optedOut(org)) throw problem(409, 'Este prospecto está excluido de contacto.')
     const { channel } = parse(z.strictObject({ channel: z.enum(['Email', 'WhatsApp']).default('Email') }), request.body)
+    return createDraft(org.id, channel)
+  }))
+  function createDraft(orgId: string, channel: NonNullable<Draft['channel']>) {
+    const org = get(orgId)
     const signal = notesFor(org.id).find((item) => item.reviewedAt && item.level === 'OBSERVACION_PUBLICA' && item.category === 'Función comercial publicada')
-    const personalized = signal ? 'En su sitio vi lo siguiente: ' + signal.statement + '\n\nPodemos conversar sobre esta revisión con alcance acordado: ' + signal.recommendation + '\n\n¿Con quién puedo coordinar una charla breve?' : undefined
+    const personalized = signal ? 'En su sitio vi lo siguiente: ' + signal.statement + '\n\nSi les interesa, podemos conversar sobre ' + signal.recommendation.replace(/^Proponer\s+/i, '').replace(/\.$/, '') + '. ¿Con quién puedo coordinar una charla breve?' : undefined
     const saved = store.insert<Draft>('outreach_drafts', channel === 'WhatsApp' ? {
       channel, subject: 'Consulta por WhatsApp · Reac Studio',
       body: personalized ? 'Hola, equipo de ' + org.name + '. Soy Misael, programador web en Reac Studio.\n\n' + personalized : 'Hola, equipo de ' + org.name + '. Soy Misael, programador web en Reac Studio. Podemos preparar una revisión de su plataforma con alcance y autorización acordados. ¿Con quién puedo coordinar una charla breve para definir qué sería útil revisar?',
@@ -294,7 +301,7 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     }, org.id)
     store.log('Borrador creado', saved.id)
     return { ...saved, contentVersion: draftVersion(saved) }
-  }))
+  }
   app.put<{ Params: { id: string } }>('/api/drafts/:id', (request) => store.transaction(() => {
     const draft = must(store.find<Draft>('outreach_drafts', parse(id, request.params.id)))
     if (optedOut(get(draft.parent))) throw problem(409, 'Este prospecto está excluido de contacto.')
@@ -311,5 +318,5 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     return store.update('outreach_drafts', draft.id, { ...draftContent(draft), reviewer, reviewedAt: new Date().toISOString() })
   }))
 
-  return { get, sourcesFor, notesFor }
+  return { get, sourcesFor, notesFor, addDiscovery }
 }
