@@ -69,6 +69,12 @@ function position(item: Organization) {
   }
 }
 
+export function exportCommercialGeometry(item: Prospect) {
+  const location = position(item)
+  return { geometry: location ? { type: 'Point' as const, coordinates: [location.longitude, location.latitude] } : null,
+    precision: location?.precision ?? 'SIN_COORDENADAS', coordinateSource: location?.sourceUrl ?? null, coordinateLicense: location?.license ?? null }
+}
+
 function publicWebsite(value: string) {
   try {
     const site = new URL(value)

@@ -22,6 +22,10 @@ codex login status
 
 En Windows, el proceso oficial puede aprovechar su propia sesión guardada de ChatGPT. Si el perfil no tiene sesión, ejecutá el flujo oficial de inicio de sesión para Codex. La app consulta únicamente el estado de la CLI y acepta sesión ChatGPT. Las llaves de API del entorno no se heredan. El proveedor queda disponible al iniciarlo explícitamente con `REAC_CODEX_ENABLED=1`. Si la CLI falla, informá el error y usá filtros manuales o la importación validada desde Orca.
 
+El proveedor prefiere el binario instalado en `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`. La copia anterior de WinGet encontrada en el PATH reportó 0.130.0 y rechazó el valor `default` de la configuración de usuario. La instalación preferida reportó 0.167.0 y `Logged in using ChatGPT`. Un turno sintético devolvió los filtros de Córdoba Capital, cantidad 4 y aplicación Reservas. Una prueba bajo el sandbox externo falló al abrir el turno. La comprobación real se ejecutó con autorización de la sesión usando el mismo código y su sandbox interno de solo lectura.
+
+Si el lote termina con `unavailable`, verificá la versión del ejecutable. Para `not_authenticated`, iniciá sesión desde la CLI oficial. Para `usage_limit`, consultá el uso de tu plan y volvé a intentar cuando esté disponible o desactivá Codex y cargá filtros explícitos. Los límites de ChatGPT pueden variar por cuenta y tiempo. La aplicación omite las llaves de API al iniciar la CLI. [Documentación oficial de OpenAI](https://developers.openai.com/blog/codex-as-a-platform)
+
 ChatGPT Plus da acceso a superficies de Codex compatibles y tiene límites de uso sujetos al plan, modelo, tamaño de tarea y cuenta. Una invocación real consume la cuota disponible. Revisá el consumo en el cliente oficial. La app no solicita ni compra créditos y no cambia a una cuenta de API ante un límite. La API facturada y el flujo OAuth de una app propia se administran por separado. [Precios y límites de Codex](https://learn.chatgpt.com/docs/pricing) · [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source)
 
 ## Alcance del intérprete

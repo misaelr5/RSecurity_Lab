@@ -1,6 +1,7 @@
 import { ensureData, databasePath, backupDirectory, privateRoot, activeDataRoot } from './storage-paths.ts'
 import { resolve } from 'node:path'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { discoveryFile } from '@reac/core'
 import { startFixture } from '../../../fixtures/lab.ts'
 import { createApp } from './app.ts'
 import { CodexCLIProvider } from './ai-provider.ts'
@@ -19,11 +20,22 @@ if (demo && (filename !== 'reac-demo.sqlite' || process.env.REAC_STORAGE === 'pr
 const operatorFile = demo ? undefined : resolve(privateRoot(), 'operator.json')
 if (operatorFile && !existsSync(operatorFile)) throw new Error('Prepará el operador con scripts/operator.ps1 antes de iniciar.')
 const operator = operatorFile ? readOperator(readFileSync(operatorFile, 'utf8')) : undefined
+const catalogName = process.env.REAC_RESEARCH_CATALOG
+let researchCatalog
+if (catalogName) {
+  if (demo) throw new Error('La demo sin sesión admite únicamente sus datos ficticios.')
+  if (!/^[a-z0-9][a-z0-9_-]{0,79}\.json$/i.test(catalogName)) throw new Error('Usá un nombre JSON simple para el catálogo local.')
+  const catalogPath = resolve(root, catalogName)
+  const info = statSync(catalogPath, { throwIfNoEntry: false })
+  if (!info?.isFile() || info.size > 500_000) throw new Error('El catálogo local debe ser un JSON de hasta 500 KB en la carpeta de datos.')
+  try { researchCatalog = discoveryFile.parse(JSON.parse(readFileSync(catalogPath, 'utf8').replace(/^\uFEFF/, ''))) }
+  catch { throw new Error('El catálogo local no cumple el esquema de descubrimiento v1.') }
+}
 const fixture = await startFixture()
 let app: ReturnType<typeof createApp>
 try {
   app = createApp({ database, port, fixturePort: fixture.port, bundle, backupDir: backupDirectory(filename, root), logger: true, operator, privateStorage: process.env.REAC_STORAGE === 'private',
-    aiProvider: process.env.REAC_CODEX_ENABLED === '1' ? new CodexCLIProvider() : undefined })
+    researchCatalog, aiProvider: process.env.REAC_CODEX_ENABLED === '1' ? new CodexCLIProvider() : undefined })
 } catch (error) {
   await fixture.close()
   throw error

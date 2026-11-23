@@ -9,16 +9,16 @@ const darkPreference = '(prefers-color-scheme: dark)'
 function getPreviewTheme(): PreviewTheme {
   try {
     const value = localStorage.getItem(themeKey)
-    return value === 'light' || value === 'dark' ? value : 'system'
+    return value === 'light' || value === 'dark' || value === 'system' ? value : 'dark'
   } catch {
     return 'system'
   }
 }
 
-export function PreviewThemeSelect({ theme, onChange }: { theme: PreviewTheme; onChange: (theme: PreviewTheme) => void }) {
+export function PreviewThemeSelect({ theme, onChange, label = 'Tema de la vista previa' }: { theme: PreviewTheme; onChange: (theme: PreviewTheme) => void; label?: string }) {
   return <label className="dash-preview__theme">
     <span>Apariencia</span>
-    <select aria-label="Tema de la vista previa" value={theme} onChange={(event) => onChange(event.target.value as PreviewTheme)}>
+    <select aria-label={label} value={theme} onChange={(event) => onChange(event.target.value as PreviewTheme)}>
       <option value="system">Sistema</option>
       <option value="light">Claro</option>
       <option value="dark">Oscuro</option>
@@ -158,8 +158,7 @@ function BarList({ rows, denominator }: { rows: { label: string; count: number }
   </ul>
 }
 
-export function DashboardPreview({ links }: { links?: Partial<Record<Destination, string>> }) {
-  const navigation = { ...defaultLinks, ...links }
+export function useDashboardTheme() {
   const [theme, setTheme] = useState<PreviewTheme>(getPreviewTheme)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia(darkPreference).matches)
   const resolvedTheme = theme === 'system' ? systemDark ? 'dark' : 'light' : theme
@@ -174,6 +173,12 @@ export function DashboardPreview({ links }: { links?: Partial<Record<Destination
     setTheme(value)
     try { localStorage.setItem(themeKey, value) } catch { /* The active theme still works. */ }
   }
+  return { theme, changeTheme, resolvedTheme }
+}
+
+export function DashboardPreview({ appearance }: { appearance: ReturnType<typeof useDashboardTheme> }) {
+  const { theme, changeTheme, resolvedTheme } = appearance
+  const navigation = defaultLinks
 
   const funnel = [
     { label: 'Contactadas', count: cohort.contacted },

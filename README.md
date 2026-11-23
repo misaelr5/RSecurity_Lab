@@ -51,6 +51,16 @@ Abrí http://127.0.0.1:4324/. La base y los archivos del piloto se guardan bajo 
 
 ## Recorrido
 
+### Prospección V3
+
+En la instancia V3 del piloto, abrí [Prospección con IA](http://127.0.0.1:4326/#research). Podés buscar en el catálogo local por cantidad, región, ciudad, rubro y aplicación. Desde una conversación de Orca abierta en el repositorio, pedile que busque en el catálogo y ejecute la CLI. Para una investigación nueva fuera del catálogo, Orca debe cotejar fuentes corporativas permitidas y preparar el lote antes de ejecutarla.
+
+```powershell
+.\scripts\research.ps1 -Port 4326 -Query 'Buscá 5 empresas de Traslasierra con reservas' -UseCodex
+```
+
+El [flujo automático](docs/PROSPECCION_AUTOMATICA.md) incluye instalación local, credenciales, revisión y comandos, y enlaza la [documentación de Codex](docs/IA_CODEX.md), el [mapa](docs/MAPA_COMERCIAL.md) y la [vista previa](docs/DASHBOARD.md).
+
 | Vista | Ruta | Flujo |
 | --- | --- | --- |
 | Dashboard | `/#dashboard` | Conteos derivados de SQLite y actividad |

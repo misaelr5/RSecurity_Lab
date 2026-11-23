@@ -1,4 +1,4 @@
-import { scryptSync } from 'node:crypto'
+import { randomUUID, scryptSync } from 'node:crypto'
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import assert from 'node:assert/strict'
@@ -11,7 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { createApp } from '../apps/api/src/app.ts'
 import { restoreBackup } from '../apps/api/src/backups.ts'
 import type { Operator } from '../apps/api/src/operator.ts'
-import { openStore } from '../apps/api/src/store.ts'
+import { openStore, schemaVersion, tablesForVersion } from '../apps/api/src/store.ts'
 import { backupDirectory } from '../apps/api/src/storage-paths.ts'
 import { startFixture } from '../fixtures/lab.ts'
 
@@ -30,7 +30,7 @@ const human = { reviewer: 'Operador de prueba', acknowledge: true }
 
 test('flujo pasivo: CSV, edición, filtros, fuentes, mensaje, informe y exclusión', async (t) => {
   const { send } = await setup(t)
-  assert.equal((await send('GET', '/api/v1/health')).json().schema, 3)
+  assert.equal((await send('GET', '/api/v1/health')).json().schema, schemaVersion)
   assert.equal((await send('GET', '/api/dashboard')).json().total, 0)
   const csv = await readFile(new URL('../fixtures/prospectos-demo.csv', import.meta.url), 'utf8')
   assert.equal((await send('POST', '/api/prospects/import', { version: 1, csv })).json().imported, 3)
@@ -93,7 +93,8 @@ test('flujo pasivo: CSV, edición, filtros, fuentes, mensaje, informe y exclusi�
   assert.match(exported.body, /presencia_web/)
   assert.match(exported.body, /Con web/)
   assert.equal((await send('DELETE', path)).statusCode, 204)
-  assert.equal((await send('GET', path)).statusCode, 404)
+  assert.ok((await send('GET', path)).json().org.archivedAt)
+  assert.equal((await send('GET', '/api/prospects?archived=only')).json().total, 1)
 })
 
 test('rechaza origen cruzado, nombres falsos de Host y cuerpos de formulario', async (t) => {
@@ -261,17 +262,19 @@ test('pipeline registra hitos y métricas, respeta opt-out y exige autorización
   assert.equal(metrics.stages.find((entry: { stage: string }) => entry.stage === 'Respondió').count, 1)
 })
 
-test('migración SQLite de v1 a v2 preserva datos y genera respaldo anterior restaurable', async () => {
+test('migración SQLite de v1 a v4 preserva datos y genera respaldo anterior restaurable', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'reac-migration-'))
   const path = join(dir, 'previous.sqlite')
   try {
     const original = openStore(path)
     const org = original.insert('organizations', prospect)
-    original.db.exec('DROP TABLE research_candidates; DROP TABLE research_jobs; DROP TABLE public_assets; DROP TABLE pipeline_events; PRAGMA user_version=1;')
+    const undo = tablesForVersion(schemaVersion).filter((table) => !tablesForVersion(1).includes(table)).reverse()
+    for (const table of undo) original.db.exec('DROP TABLE ' + table)
+    original.db.exec('PRAGMA user_version=1')
     original.db.close()
     const upgraded = openStore(path)
     try {
-      assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, 3)
+      assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, schemaVersion)
       assert.equal(upgraded.find<{ name: string }>('organizations', org.id)?.name, prospect.name)
       assert.equal(upgraded.count('public_assets'), 0)
     } finally { upgraded.db.close() }
@@ -327,9 +330,19 @@ test('sesión monousuario protege archivos, exige clave y se invalida con logout
   assert.equal(login.headers['set-cookie'], undefined)
   assert.match(login.json().sessionToken, /^[a-f0-9]{64}$/)
   const headers = { host: '127.0.0.1:4310', authorization: 'Bearer ' + login.json().sessionToken, 'content-type': 'application/json' }
+  const cliLogin = await send('POST', '/api/v1/operator/research-session', { key })
+  assert.equal(cliLogin.statusCode, 200)
+  const cli = { ...headers, authorization: 'Bearer ' + cliLogin.json().sessionToken }
+  const lot = await app.inject({ method: 'POST', url: '/api/v1/research/jobs', headers: cli, payload: { requestId: randomUUID() } })
+  assert.equal(lot.statusCode, 202)
+  const lotUrl = '/api/v1/research/jobs/' + lot.json().id
+  assert.equal((await app.inject({ url: lotUrl + '/summary', headers: cli })).statusCode, 200)
+  assert.equal((await app.inject({ url: lotUrl, headers: cli })).statusCode, 401)
+  assert.equal((await app.inject({ url: '/api/v1/prospects/export', headers: cli })).statusCode, 401)
   assert.equal((await app.inject({ url: '/api/v1/retention', headers })).statusCode, 200)
   assert.equal((await app.inject({ method: 'POST', url: '/api/v1/operator/logout', headers, payload: {} })).statusCode, 200)
   assert.equal((await app.inject({ url: '/api/v1/prospects/export', headers })).statusCode, 401)
+  assert.equal((await app.inject({ url: lotUrl + '/summary', headers: cli })).statusCode, 401)
 })
 
 test('descubrimiento manual exige confirmación, conserva duplicados y enlaza transferencia CRM', async (t) => {

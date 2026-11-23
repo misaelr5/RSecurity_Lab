@@ -10,6 +10,8 @@ Los tests usan SQLite en memoria o directorios temporales. El smoke levanta la a
 - Límite de tasa, cancelación, rechazo de redirects y evidencia en el fixture fijo.
 - CSV y JSON portables, fórmula reversible, HTML escapado, redacción, exclusiones, fuentes de otra organización y coincidencias de identidad.
 - Aprobaciones obsoletas de informe y borrador, revisión de resultados inertes, estado solo confirmado por el operador.
-- Migración sobre un archivo v1, respaldo previo restaurable, copia v2 y rechazo de overwrite. El E2E genera un PDF desde Chrome con la vista imprimible.
+- Migración automatizada de v1 a v3, respaldo previo restaurable, verificación de la restauración de la base v2 del piloto y rechazo de sobrescritura. El E2E genera un PDF desde Chrome con la vista imprimible.
+- V3 cubre 20 fichas ficticias, lote cotejado, idempotencia, deduplicación, opt-out, fuentes vencidas, contenido externo tratado como datos, revisión manual, cancelación y errores simulados de autenticación y cuota. La prueba de sesión comprueba el alcance del token de CLI.
+- Chrome verifica el cambio de tema y su persistencia, el uso del sistema a 390 px, el lote desde el dashboard, la ficha, los marcadores y las descargas CSV y GeoJSON. `REAC_CAPTURE_DIR` habilita capturas de `#preview` con datos ficticios.
 
 [Bitácora de ejecuciones](ESTADO.md)

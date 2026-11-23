@@ -13,7 +13,7 @@ export function verifyBackup(path: string) {
     const names = new Set(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all().map((entry) => entry.name))
     const version = Number(db.prepare('PRAGMA user_version').get()?.user_version)
     const tables = tablesForVersion(version)
-    if (![1, 2, schemaVersion].includes(version) || tables.some((table) => !names.has(table)) ||
+    if (!Number.isInteger(version) || version < 1 || version > schemaVersion || tables.some((table) => !names.has(table)) ||
       db.prepare('PRAGMA integrity_check').get()?.integrity_check !== 'ok' ||
       db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Respaldo incompatible o dañado.')
     for (const table of tables) db.prepare('SELECT id, parent, unique_key, data, created, updated FROM ' + table + ' LIMIT 0').all()

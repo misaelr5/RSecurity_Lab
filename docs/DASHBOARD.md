@@ -4,7 +4,7 @@ Abrí la ruta local `#preview` para evaluar la interfaz con datos ficticios. La 
 
 ## Temas
 
-Usá el selector de la cabecera para cambiar entre Claro, Oscuro y Sistema. El cambio es inmediato. La elección se guarda en `localStorage` bajo `reac-preview-theme`. Sistema escucha el ajuste de apariencia del dispositivo. La preferencia se limita a la vista previa mientras el diseño espera aprobación.
+Usá el selector de la cabecera para cambiar entre Claro, Oscuro y Sistema. El cambio es inmediato. La elección se guarda en `localStorage` bajo `reac-preview-theme` y aplica al dashboard operativo, al mapa y a la vista previa. Sistema escucha el ajuste de apariencia del dispositivo. La composición nueva espera aprobación en `#preview`.
 
 El componente `DashboardPreview` comparte la misma estructura React entre temas. Los tokens CSS semánticos cubren fondo, superficie, borde, texto principal y secundario, controles, series y foco. Se usan dos estilos de línea en el gráfico para distinguir las series por forma y color. La vista evita recursos externos. Los contrastes calculados de texto y acción en ambos temas superan 7.3:1. El contraste mínimo calculado entre las líneas principales y sus superficies supera 5.4:1.
 
@@ -29,6 +29,8 @@ La dirección visual toma ideas de densidad y navegación de Tabler, composició
 | Distribución | Empresas agrupadas por rubro o región. La longitud de cada barra es la cantidad ÷ total de cartera |
 
 Los porcentajes no se muestran si el denominador es cero. El gráfico de evolución ofrece ventanas de cuatro y ocho semanas. La cobertura territorial muestra cantidades agrupadas y abre el mapa comercial separado. El enlace a un mapa operativo conserva la distinción entre conteos agregados y ubicaciones verificadas.
+
+El dashboard operativo presenta ocho semanas de altas y contactos. Muestra el hito «Auditoría propuesta» cuando está registrado en el pipeline. El conteo de reuniones usa el estado comercial actual de fichas con contacto registrado. La conversión usa clientes con contacto registrado sobre empresas con ese hito. Estas métricas operativas se leen de SQLite.
 
 ## Revisión de la propuesta
 

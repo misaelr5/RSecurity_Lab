@@ -15,3 +15,4 @@ Aplican al agente Codex y a subagentes dentro de este proyecto.
 11. Registrar en `docs/ESTADO.md` cada avance, sus pruebas reales, errores y próximos pasos.
 12. Si una tarea tiene riesgo o ambigüedad de autorización, elegir una alternativa local/sintética y continuar con el resto del producto.
 13. Trabajar un ciclo a la vez según `docs/CICLOS_IMPLEMENTACION.md`. Antes de cerrar, revisar el diff contra los criterios de aceptación y registrar las pruebas realmente ejecutadas.
+14. Para una solicitud comercial desde Orca, usá `scripts/research.ps1` contra la instancia local. Si requiere fuentes nuevas, cotejá los datos del negocio en fuentes públicas permitidas y procesá un lote JSON mediante la API de investigación. Confirmá únicamente lo que pudiste verificar. Guardá los lotes fuera de Git. El turno de Codex en el dashboard interpreta filtros y usa el catálogo privado configurado. Ver `docs/PROSPECCION_AUTOMATICA.md`.

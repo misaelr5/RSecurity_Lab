@@ -18,3 +18,5 @@ Las rutas se sirven con el alcance de autenticación del resto de la API local:
 - GeoJSON expresa cada punto como [longitud, latitud]. Conserva las filas sin ubicación con geometría null. En CSV, las coordenadas se emiten como números reales y cada celda de texto usa la misma protección contra fórmulas que otras exportaciones del proyecto. JSON conserva la ubicación nula o la coordenada junto a su nivel de precisión y atribución.
 
 La alternativa para ampliar cobertura es agregar localidades al catálogo oficial en una actualización revisada. Un proveedor de calles o direcciones necesitaría validación de confianza, modelo de coordenadas precisas y un procedimiento separado que preserve el perímetro de datos operativos.
+
+En la instancia V3, las 14 fichas nuevas tienen ubicación aproximada por localidad. El GeoJSON de cartera exportado contiene 24 fichas, incluidas las diez del piloto inicial.

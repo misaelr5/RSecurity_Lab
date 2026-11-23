@@ -8,7 +8,7 @@ import { DownloadButton, Empty, Feedback, Field, Resource, Review, useAction, us
 type Props = { revision: number; refresh: () => void; open: (path: string) => void }
 
 export function Prospects({ revision, refresh, open, sourcesOnly = false }: Props & { sourcesOnly?: boolean }) {
-  const [query, setQuery] = useState({ q: '', region: '', industry: '', applicationType: '', status: '', page: '1' })
+  const [query, setQuery] = useState({ q: '', region: '', industry: '', applicationType: '', status: '', archived: 'exclude', page: '1' })
   const [adding, setAdding] = useState(false)
   const [importing, setImporting] = useState(false)
   const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value))
@@ -58,10 +58,11 @@ export function Prospects({ revision, refresh, open, sourcesOnly = false }: Prop
         <label className="field">Rubro<input value={query.industry} onChange={(e) => update('industry', e.target.value)} placeholder="Todos los rubros" maxLength={120} /></label>
         <label className="field">Tipo de aplicación<select value={query.applicationType} onChange={(e) => update('applicationType', e.target.value)}><option value="">Todas</option>{applicationTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
         <label className="field">Seguimiento<select value={query.status} onChange={(e) => update('status', e.target.value)}><option value="">Todos</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+        <label className="field">Archivado<select value={query.archived} onChange={(e) => update('archived', e.target.value)}><option value="exclude">Activas</option><option value="only">Archivadas</option><option value="include">Todas</option></select></label>
       </div>
       <Resource result={result}>{(page) => page.items.length ? <>
         <div className="table-scroll"><table><thead><tr><th>Empresa</th><th>Localidad</th><th>Rubro</th><th>Seguimiento</th></tr></thead><tbody>
-          {page.items.map((item) => <tr key={item.id}><td><a href={'#' + (sourcesOnly ? 'evidence/' : 'prospect/') + item.id}>{item.name}</a><small>{item.website ? new URL(item.website).hostname : 'Sitio pendiente'}</small></td><td>{item.city}</td><td>{item.industry}{item.applicationType && <small>{item.applicationType}</small>}</td><td><span className="tag">{item.status === 'No contactar' || item.consent === 'Excluido' ? 'Excluido' : item.status}</span></td></tr>)}
+          {page.items.map((item) => <tr key={item.id}><td><a href={'#' + (sourcesOnly ? 'evidence/' : 'prospect/') + item.id}>{item.name}</a><small>{item.website ? new URL(item.website).hostname : 'Sitio pendiente'}</small></td><td>{item.city}</td><td>{item.industry}{item.applicationType && <small>{item.applicationType}</small>}</td><td><span className="tag">{item.status === 'No contactar' || item.consent === 'Excluido' ? 'Excluido' : item.status}</span>{item.archivedAt && <small>Archivada</small>}</td></tr>)}
         </tbody></table></div>
         <div className="toolbar pagination"><button disabled={page.page <= 1} onClick={() => update('page', String(page.page - 1))}>Anterior</button><span>{page.total} fichas · página {page.page}</span><button disabled={page.page * 25 >= page.total} onClick={() => update('page', String(page.page + 1))}>Siguiente</button></div>
       </> : <Empty>{sourcesOnly ? 'Creá una ficha de prospecto para asociar evidencia.' : 'No hay fichas para estos filtros. Creá un prospecto o importá un CSV.'}</Empty>}</Resource>
@@ -89,16 +90,16 @@ function ProspectForm({ item, busy, onSave }: { item?: Organization; busy: boole
   </form>
 }
 
-export function ProspectDetail({ id, revision, refresh, open, onlyEvidence }: Props & { id: string; onlyEvidence: boolean }) {
+export function ProspectDetail({ id, revision, refresh, onlyEvidence }: Props & { id: string; onlyEvidence: boolean }) {
   const result = useResource<Detail>('/prospects/' + id, revision)
-  return <Resource result={result}>{(data) => <PortfolioDetail data={data} refresh={refresh} open={open} onlyEvidence={onlyEvidence} revision={revision} />}</Resource>
+  return <Resource result={result}>{(data) => <PortfolioDetail data={data} refresh={refresh} onlyEvidence={onlyEvidence} revision={revision} />}</Resource>
 }
-function PortfolioDetail({ data, refresh, open, onlyEvidence, revision }: Props & { data: Detail; onlyEvidence: boolean }) {
+function PortfolioDetail({ data, refresh, onlyEvidence, revision }: Omit<Props, 'open'> & { data: Detail; onlyEvidence: boolean }) {
   const { org } = data
   const action = useAction(refresh)
   const [editing, setEditing] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const blocked = org.status === 'No contactar' || org.consent === 'Excluido'
+  const archived = Boolean(org.archivedAt)
   const run = action.run
   return <>
     <div className="toolbar"><a className="button" href={onlyEvidence ? '#evidence' : '#prospects'}>Volver al listado</a><a className="button" href={'#reports/prospect/' + org.id}>Ver informe</a>
@@ -106,6 +107,7 @@ function PortfolioDetail({ data, refresh, open, onlyEvidence, revision }: Props 
     </div>
     <Feedback state={action} />
     <section className="panel profile"><div><h2>{org.name}</h2><p className="muted">{org.industry} · {org.city} · {org.region}{org.applicationType ? ' · ' + org.applicationType : ''}</p></div><span className="tag">{blocked ? 'Excluido' : org.status}</span>
+      {org.archivedAt && <p className="muted">Archivada el {when(org.archivedAt)}{org.archiveReason ? ' · ' + org.archiveReason : ''}.</p>}
       {!onlyEvidence && <dl className="summary"><div><dt>Sitio web</dt><dd>{org.website || 'Pendiente'}</dd></div><div><dt>Contacto</dt><dd>{[org.contact, org.email, org.phone].filter(Boolean).join(' · ') || 'Pendiente'}</dd></div><div><dt>Importación</dt><dd>{org.origin === 'MANUAL' ? 'Registro manual' : 'Reac Leads · CSV v1'}</dd></div><div><dt>Próximo seguimiento</dt><dd>{org.nextFollowUp || 'Sin fecha'}</dd></div></dl>}
     </section>
     {!onlyEvidence && data.duplicates.length > 0 && <section className="panel"><h2>Coincidencias de identidad</h2><p className="muted">Comprobá si las fichas corresponden a la misma empresa.</p><ul className="records">{data.duplicates.map((item) => <li key={item.id}><a href={'#prospect/' + item.id}>{item.name}</a><small>{item.matches.join(' · ')}</small></li>)}</ul></section>}
@@ -142,28 +144,32 @@ function PortfolioDetail({ data, refresh, open, onlyEvidence, revision }: Props 
       </section>
     </div>
     <Assets id={org.id} sources={data.sources} revision={revision} refresh={refresh} />
-    {!onlyEvidence && <div className="split"><CommercialTimeline id={org.id} revision={revision} refresh={refresh} blocked={blocked} /><OpportunityScore id={org.id} revision={revision} /></div>}
+    {!onlyEvidence && <div className="split"><CommercialTimeline id={org.id} revision={revision} refresh={refresh} blocked={blocked || archived} /><OpportunityScore id={org.id} revision={revision} /></div>}
     {!onlyEvidence && <section className="panel">
       <h2>Mensajes comerciales</h2>
-      {blocked ? <Empty>El prospecto está excluido de contacto.</Empty> : <>
+      {blocked || archived ? <Empty>{blocked ? 'El prospecto está excluido de contacto.' : 'La ficha está archivada.'}</Empty> : <>
         <p className="muted">Prepará y revisá el mensaje para usarlo por tu cuenta.</p>
         <button onClick={() => void run(() => api('/prospects/' + org.id + '/drafts', 'POST'), 'Borrador creado.')} disabled={action.busy}>Crear borrador</button>
         <button onClick={() => void run(() => api('/prospects/' + org.id + '/drafts', 'POST', { channel: 'WhatsApp' }), 'Borrador de WhatsApp creado.')} disabled={action.busy}>Preparar WhatsApp</button>
       </>}
       <ul className="records">{data.drafts.map((item) => <li key={item.id}><strong>{item.subject}</strong><span className="tag">{item.channel ?? 'Email'}</span>
         <small>{item.reviewedAt ? 'Aprobado para uso manual · ' + item.reviewer : 'Borrador'}</small><p className="pre">{item.body}</p>
-        {!blocked && <div className="split"><details><summary>Editar mensaje</summary><form className="fields" onSubmit={(event) => {
+        {!blocked && !archived && <div className="split"><details><summary>Editar mensaje</summary><form className="fields" onSubmit={(event) => {
           const payload = values(event)
           void run(() => api('/drafts/' + item.id, 'PUT', payload), 'Mensaje guardado como borrador.')
         }}><Field label="Asunto" name="subject" value={item.subject} required /><Field label="Mensaje" name="body" value={item.body} area required /><div className="wide"><button disabled={action.busy}>Guardar borrador</button></div></form></details>
           {!item.reviewedAt && <details><summary>Aprobar mensaje</summary><Review busy={action.busy} label="Aprobar para uso manual" onReview={(payload) => void run(() => api('/drafts/' + item.id + '/review', 'POST', { ...payload, contentVersion: item.contentVersion }), 'Mensaje aprobado.')} /></details>}</div>}
       </li>)}</ul>
     </section>}
-    {!onlyEvidence && !blocked && <details className="panel"><summary>Eliminar ficha</summary><p>Se eliminarán sus datos, fuentes, observaciones y borradores.</p>
-      {!deleting ? <button onClick={() => setDeleting(true)}>Preparar eliminación</button> : <div className="toolbar"><button onClick={() => setDeleting(false)}>Cancelar</button><button className="danger" disabled={action.busy} onClick={() => void run(async () => {
-        await api('/prospects/' + org.id, 'DELETE')
-        open('prospects')
-      }, 'Ficha eliminada.')}>Confirmar eliminación</button></div>}
+    {!onlyEvidence && !archived && <details className="panel"><summary>Archivar ficha</summary><p>La ficha saldrá de la cartera activa y conservará su historial.</p>
+      <form className="fields v4-fields" onSubmit={(event) => {
+        const data = values(event)
+        void run(() => api('/prospects/' + org.id + '/archive', 'POST', { reason: data.reason }), 'Ficha archivada.')
+      }}>
+        <Field label="Motivo de archivo" name="reason" area required />
+        <label className="check wide"><input type="checkbox" required />Confirmo el archivo de la ficha.</label>
+        <div className="wide"><button disabled={action.busy}>Confirmar archivo</button></div>
+      </form>
     </details>}
   </>
 }

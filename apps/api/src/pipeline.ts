@@ -7,7 +7,7 @@ import { parse, must, problem } from './http.ts'
 
 export function registerPipeline(app: FastifyInstance, store: Store) {
   function context(raw: string) {
-    const org = must(store.find<Prospect>('organizations', parse(id, raw)))
+    const org = must(store.find<Prospect & { archivedAt?: string }>('organizations', parse(id, raw)))
     const engagement = must(store.list('engagements', org.id)[0])
     const events = store.list<PipelineEvent>('pipeline_events', engagement.id)
     return { org, engagement, events, stage: events[0]?.stage ?? pipelineStages[0] }
@@ -22,8 +22,8 @@ export function registerPipeline(app: FastifyInstance, store: Store) {
     const target = pipelineStages.indexOf(value.stage)
     const current = pipelineStages.indexOf(stage)
     if (target <= current) throw problem(409, 'Elegí una etapa posterior a la actual.')
-    if (optedOut(org) && target >= pipelineStages.indexOf('Contacto preparado')) {
-      throw problem(409, 'La ficha tiene una exclusión de contacto.')
+    if ((optedOut(org) || org.archivedAt) && target >= pipelineStages.indexOf('Contacto preparado')) {
+      throw problem(409, 'La ficha está excluida o archivada.')
     }
     if ((target >= pipelineStages.indexOf('Autorizado') && current < pipelineStages.indexOf('Autorizado')) || value.stage === 'Auditando') {
       const valid = store.list<AuthorizationRecord>('authorizations', engagement.id).some((item) =>

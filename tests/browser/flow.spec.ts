@@ -8,6 +8,32 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
 })
 
+test('vista previa y tema compartido entre el dashboard y el mapa', async ({ page }) => {
+  await page.getByRole('link', { name: 'Vista previa del dashboard' }).click()
+  await expect(page.getByText('Vista previa con datos ficticios')).toBeVisible()
+  const theme = page.getByLabel('Tema de la vista previa')
+  await page.setViewportSize({ width: 1440, height: 1080 })
+  for (const value of ['light', 'dark'] as const) {
+    await theme.selectOption(value)
+    await expect(page.locator('.dash-preview')).toHaveAttribute('data-preview-theme', value)
+    if (process.env.REAC_CAPTURE_DIR) {
+      await page.screenshot({ path: resolve(process.env.REAC_CAPTURE_DIR, value === 'light' ? 'dashboard-v3-claro.png' : 'dashboard-v3-oscuro.png'), fullPage: true })
+    }
+  }
+  await page.reload()
+  await expect(theme).toHaveValue('dark')
+  await theme.selectOption('system')
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect(page.locator('.dash-preview')).toHaveAttribute('data-preview-theme', 'light')
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.getByRole('link', { name: 'Ver mapa' }).click()
+  await expect(page.getByRole('heading', { name: 'Mapa de prospectos' })).toBeVisible()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await page.getByRole('link', { name: 'Dashboard', exact: true }).click()
+  await expect(page.locator('.table-scroll thead').first()).toHaveCSS('background-color', 'rgb(226, 236, 246)')
+})
+
 test('cartera desde CSV, aprobación manual, fixture e informe en Chrome', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -71,7 +97,7 @@ test('descubrimiento, evidencia, prioridad, borrador y CRM desde la interfaz', a
   await page.getByLabel('Responsable de la revisión').fill('Operador QA')
   await page.getByLabel('Verifiqué fuentes, canales públicos y atribución.').check()
   await page.getByRole('button', { name: 'Incorporar fichas verificadas' }).click()
-  await page.getByRole('link', { name: 'Prospectos' }).click()
+  await page.getByRole('link', { name: 'Prospectos', exact: true }).click()
   await page.getByLabel('Tipo de aplicación').selectOption('Comercio electrónico')
   await page.getByRole('link', { name: 'Comercio Ficticio' }).click()
   await expect(page.getByRole('heading', { name: 'Prioridad comercial' })).toBeVisible()
@@ -83,4 +109,29 @@ test('descubrimiento, evidencia, prioridad, borrador y CRM desde la interfaz', a
   const file = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Descargar CSV para Reac Leads' }).click()
   expect((await file).suggestedFilename()).toBe('reac-leads-v1.csv')
+})
+
+test('lote desde dashboard, ficha, mapa, historial y exportaciones', async ({ page }) => {
+  await page.getByRole('link', { name: 'Nueva búsqueda con IA' }).click()
+  await page.getByLabel('Instrucción de búsqueda').fill('Buscá 1 empresa de Villa Dolores')
+  await page.getByLabel('Cantidad', { exact: true }).fill('1')
+  await page.getByRole('button', { name: 'Iniciar investigación' }).click()
+  await expect(page.getByRole('heading', { name: 'Completado' })).toBeVisible()
+  const lotPath = page.url()
+  await page.getByRole('link', { name: 'Comercio Catálogo QA' }).click()
+  await expect(page.getByRole('heading', { name: 'Comercio Catálogo QA' })).toBeVisible()
+  await page.getByRole('link', { name: 'Mapa de prospectos' }).click()
+  await page.getByRole('button', { name: /prospectos en Villa Dolores/ }).click()
+  await expect(page.getByText('Comercio Catálogo QA', { exact: true })).toBeVisible()
+  const geo = page.waitForEvent('download')
+  await page.getByRole('button', { name: /GeoJSON/ }).click()
+  expect((await geo).suggestedFilename()).toBe('mapa-prospectos.geojson')
+  await page.getByRole('link', { name: 'Empresas prospectadas' }).click()
+  await expect(page.getByRole('link', { name: 'Comercio Catálogo QA' })).toBeVisible()
+  await page.getByRole('link', { name: 'Exportaciones' }).click()
+  const csv = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'CSV para Excel' }).click()
+  expect((await csv).suggestedFilename()).toBe('empresas-prospectadas.csv')
+  await page.goto(lotPath)
+  await expect(page.getByRole('heading', { name: 'Completado' })).toBeVisible()
 })

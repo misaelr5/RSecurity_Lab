@@ -1,5 +1,12 @@
 import { useEffect, useCallback, useState } from 'react'
 import { Discovery } from './discovery.tsx'
+import { ResearchWork } from './research-work.tsx'
+import { SavedResearch } from './saved-research.tsx'
+import { ResearchReview } from './research-review.tsx'
+import { CommercialMap } from './commercial-map.tsx'
+import { CommercialRegister } from './commercial-register.tsx'
+import { CommercialMetrics } from './commercial-metrics.tsx'
+import { DashboardPreview, PreviewThemeSelect, useDashboardTheme } from './dashboard-preview.tsx'
 import { OperatorGate } from './operator.tsx'
 import { createRoot } from 'react-dom/client'
 import { regions } from '../../../packages/core/src/constants.ts'
@@ -11,30 +18,54 @@ import { when } from './client.ts'
 import type { Dashboard } from './client.ts'
 import './style.css'
 import './pilot-design.css'
+import './operational-theme.css'
+import './commercial-workflow.css'
 
 const navigation = [
   { id: 'dashboard', text: 'Dashboard', icon: '▦' },
   { id: 'prospects', text: 'Prospectos', icon: '◇' },
   { id: 'discovery', text: 'Descubrimiento', icon: '⌖' },
+  { id: 'research', text: 'Prospección con IA', icon: '✧' },
+  { id: 'saved', text: 'Búsquedas guardadas', icon: '⊞' },
+  { id: 'review', text: 'Revisión de prospectos', icon: '▱' },
+  { id: 'companies', text: 'Empresas prospectadas', icon: '◫' },
+  { id: 'map', text: 'Mapa de prospectos', icon: '⌑' },
+  { id: 'exports', text: 'Exportaciones', icon: '⇩' },
   { id: 'evidence', text: 'Evidencia pública', icon: '▤' },
   { id: 'audits', text: 'Auditorías', icon: '⬡' },
   { id: 'reports', text: 'Informes', icon: '▧' },
   { id: 'settings', text: 'Configuración', icon: '⚙' },
 ]
+const workspaceDescriptions: Record<string, string> = {
+  dashboard: 'Estado de la cartera y del laboratorio.', prospects: 'Cartera comercial de Reac Studio.',
+  discovery: 'Fuentes públicas, incorporación de fichas y traslado al CRM.', evidence: 'Fuentes registradas y observaciones revisables.',
+  audits: 'Laboratorio de configuración y alcance documentado.', reports: 'Relevamientos y exportaciones para revisión.',
+  settings: 'Almacenamiento, herramientas y respaldos.', research: 'Consultas, resultados y revisión de lotes.',
+  companies: 'Empresas investigadas, registros de contacto y seguimientos.', map: 'Ubicaciones documentadas de la cartera.',
+  exports: 'Descargas de la cartera comercial y sus fuentes.', saved: 'Configuraciones y resultados de ejecuciones anteriores.',
+  review: 'Evidencia, coincidencias y decisiones pendientes.',
+}
 const readHash = () => window.location.hash.slice(1).split('/')
 const open = (path: string) => { window.location.hash = path }
 
 function App({ signOut }: { signOut?: () => void }) {
   const [route, setRoute] = useState(readHash)
   const [revision, setRevision] = useState(0)
+  const appearance = useDashboardTheme()
   const refresh = useCallback(() => setRevision((value) => value + 1), [])
   useEffect(() => {
     const onHash = () => { setRoute(readHash()); window.scrollTo(0, 0) }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+  useEffect(() => {
+    document.documentElement.dataset.theme = appearance.resolvedTheme
+    return () => { delete document.documentElement.dataset.theme }
+  }, [appearance.resolvedTheme])
   const [view, first, second] = route
-  const active = view === 'prospect' ? 'prospects' : view === 'audit' ? 'audits' : navigation.some((item) => item.id === view) ? view : 'dashboard'
+  if (view === 'preview') return <DashboardPreview appearance={appearance} />
+  const active = view === 'prospect' ? 'prospects' : view === 'audit' ? 'audits' : view === 'reprospect' ? 'research'
+    : navigation.some((item) => item.id === view) ? view : 'dashboard'
   const title = navigation.find((item) => item.id === active)?.text
   return <div className="shell">
     <aside className="sidebar">
@@ -43,15 +74,17 @@ function App({ signOut }: { signOut?: () => void }) {
       <div className="connection"><i aria-hidden="true" />Espacio de trabajo local{signOut && <div><button onClick={signOut}>Cerrar sesión</button></div>}</div>
     </aside>
     <main>
-      <header className="page-header"><div><h1>{title}</h1><p>{
-        active === 'dashboard' ? 'Estado de la cartera y del laboratorio.' : active === 'prospects' ? 'Cartera comercial de Reac Studio.' :
-        active === 'discovery' ? 'Fuentes públicas, incorporación de fichas y traslado al CRM.' : active === 'evidence' ? 'Fuentes registradas y observaciones revisables.' :
-        active === 'audits' ? 'Laboratorio de configuración y alcance documentado.' :
-        active === 'reports' ? 'Relevamientos y exportaciones para revisión.' : 'Almacenamiento, herramientas y respaldos.'
-      }</p></div><span className="local-chip">127.0.0.1</span></header>
+      <header className="page-header"><div><h1>{title}</h1><p>{workspaceDescriptions[active]}</p></div>
+        <PreviewThemeSelect theme={appearance.theme} onChange={appearance.changeTheme} label="Tema de la aplicación" />
+      </header>
       <div className="page" key={route.join('/')}>
         {active === 'discovery' && <Discovery revision={revision} refresh={refresh} />}
-        {active === 'dashboard' && <Overview revision={revision} />}
+        {active === 'dashboard' && <><Overview revision={revision} /><CommercialMetrics revision={revision} /></>}
+        {active === 'research' && <ResearchWork revision={revision} refresh={refresh} jobId={view === 'research' ? first : undefined} reprospect={view === 'reprospect'} campaignId={view === 'reprospect' ? first : undefined} />}
+        {active === 'saved' && <SavedResearch revision={revision} refresh={refresh} />}
+        {active === 'review' && <ResearchReview revision={revision} refresh={refresh} />}
+        {active === 'map' && <CommercialMap revision={revision} />}
+        {(active === 'companies' || active === 'exports') && <CommercialRegister revision={revision} refresh={refresh} exportOnly={active === 'exports'} />}
         {(active === 'prospects' || active === 'evidence') && (first
           ? <ProspectDetail id={first} revision={revision} refresh={refresh} open={open} onlyEvidence={active === 'evidence'} />
           : <Prospects revision={revision} refresh={refresh} open={open} sourcesOnly={active === 'evidence'} />)}

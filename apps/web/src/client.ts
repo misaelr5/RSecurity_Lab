@@ -5,7 +5,7 @@ import type { Finding } from '../../api/src/defensive-reviews.ts'
 import type { Run } from '../../api/src/audits.ts'
 
 export type Entity<T> = T & { id: string; createdAt: string; updatedAt: string }
-export type Organization = Entity<Prospect & { origin: string }>
+export type Organization = Entity<Prospect & { origin: string; archivedAt?: string; archiveReason?: string }>
 export type Reviewed = { reviewedAt?: string; reviewer?: string }
 export type PublicSource = Entity<Source>
 export type Asset = Entity<PublicAsset>

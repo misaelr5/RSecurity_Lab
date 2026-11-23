@@ -1,5 +1,7 @@
 # Proveedores de descubrimiento comercial pasivo
 
+Para el flujo comercial V3 aplican los términos contrastados en [Proveedores V3](PROVEEDORES.md). Las restricciones de uso comercial de Córdoba Turismo provincial excluyen sus datos del catálogo operativo. Las fichas V3 usan fuentes corporativas.
+
 Consulta de documentación oficial del 17 de enero de 2027. La decisión del piloto es **usar guías públicas como punto de partida, corroborar los datos en el sitio oficial de cada empresa y registrar los hechos con su fuente**. Las fichas solo incorporan información comercial publicada. La app presenta enlaces para navegación voluntaria y recibe captura o importación estructurada.
 
 ## Fuentes regionales

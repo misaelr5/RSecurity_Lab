@@ -1,0 +1,29 @@
+@media screen {
+  .sidebar nav { overflow-y: auto; }
+  .page-header .dash-preview__theme { align-self: center; }
+
+  :root[data-theme='light'] {
+    color: #19283a;
+    background: #f0f4f8;
+    color-scheme: light;
+    --page: #f0f4f8;
+    --side: #f8fafc;
+    --surface: #fff;
+    --line: #c5d1df;
+    --muted: #425570;
+    --accent: #174f81;
+    --pilot-field: #f3f7fb;
+    --pilot-hover: #e5edf5;
+  }
+
+  :root[data-theme='light'] .shell :is(.field, .check, th, .tag, code, summary, nav a, input, select, textarea) { color: #19283a; }
+  :root[data-theme='light'] .shell :is(input, select, textarea, button, .button):not(.primary) { background: #f3f7fb; border-color: #a4b4c7; }
+  :root[data-theme='light'] .shell :is(button, .button):not(.primary, .danger) { color: #19283a; }
+  :root[data-theme='light'] .shell button.danger { color: #8a2237; }
+  :root[data-theme='light'] .shell :is(nav a:hover, nav a[aria-current], button:hover:not(.primary), .button:hover:not(.primary), .overview) { background: #e2ecf6; border-color: #9aacbf; }
+  :root[data-theme='light'] .shell :is(.table-scroll thead, .retention-summary, .local-chip) { background: #e2ecf6; color: #19283a; }
+  :root[data-theme='light'] .shell :is(.overview h2, input::placeholder) { color: #394d68; }
+  :root[data-theme='light'] .shell :is(button, .button).primary { color: #fff; background: #174f81; }
+  :root[data-theme='light'] .shell :is(button, .button).primary:hover { background: #103c65; }
+  :root[data-theme='light'] .shell :focus-visible { outline-color: #174f81; }
+}

@@ -20,3 +20,11 @@
 1. Validar un intercambio de ida y vuelta con una instancia descartable del CRM, incluidos campos específicos, fórmulas neutralizadas y exclusiones. Guardar una copia previa.
 2. Definir custodia, retención, autenticación local y permisos antes de cargar datos de clientes.
 3. Seleccionar una fuente pública con términos revisados, agregar un proveedor pasivo con límites y recién después ejecutar el piloto comercial. El piloto con empresas reales sigue pendiente.
+
+## V3 · situación del piloto
+
+- [x] Instancia protegida con el piloto anterior restaurado y 14 fichas nuevas, catálogo cotejado, Codex CLI y una sola API de lotes.
+- [x] Historial, métricas, mapa local, exportaciones, temas y capturas de la vista previa.
+- [ ] Aprobar la composición visual de `#preview` antes de cambiar la pantalla principal.
+- [ ] Integrar un proveedor de descubrimiento web con condiciones aptas para almacenar y utilizar datos comerciales. Actualmente el dashboard filtra el catálogo y Orca investiga las fuentes nuevas para preparar el ingreso.
+- [ ] Ampliar cobertura cartográfica y evaluar geocodificación de direcciones con fuente verificable y licencia compatible.

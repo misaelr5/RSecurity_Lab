@@ -29,3 +29,5 @@ Configuración muestra qué alcanza los plazos. El sistema no purga automáticam
 ## Alcance técnico
 
 El fixture usa una IP literal y un puerto interno. No resuelve nombres ni sigue redirecciones. Los directorios de descubrimiento se abren por acción del usuario y los activos públicos solo se guardan con atribución. El producto no usa esos datos como entrada para conexiones técnicas. Los resultados defensivos se importan como resúmenes inertes.
+
+V3 mantiene la investigación comercial en la API autenticada. La sesión exclusiva de la CLI puede iniciar lotes y leer resúmenes durante 15 minutos. Codex recibe el texto de consulta y devuelve filtros validados. El backend lee evidencia local como datos y no visita las URL ni se las entrega a Codex. El catálogo y la base real residen en el perfil privado. Los filtros y el tamaño de cada lote se limitan en el servidor. Revisá las fichas y fuentes vencidas y administrá las copias según la política de retención.

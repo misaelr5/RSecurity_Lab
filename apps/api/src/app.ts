@@ -6,6 +6,10 @@ import { z } from '@reac/core'
 import { openStore, schemaVersion } from './store.ts'
 import { registerDefensiveReviews } from './defensive-reviews.ts'
 import { registerResearch } from './research.ts'
+import type { ResearchCatalog } from './research.ts'
+import { registerCommercialMap } from './commercial-map.ts'
+import { registerCommercialRegister } from './commercial-register.ts'
+import { registerHistory } from './history.ts'
 import type { AIProvider } from './ai-provider.ts'
 import { registerPipeline } from './pipeline.ts'
 import { registerPublicAssets } from './public-assets.ts'
@@ -18,7 +22,7 @@ import type { Operator } from './operator.ts'
 import type { Prospect } from '@reac/core'
 import { backupName, createBackup } from './backups.ts'
 
-type Options = { database: string; fixturePort: number; port: number; bundle?: string; backupDir?: string; logger?: boolean; operator?: Operator; privateStorage?: boolean; aiProvider?: AIProvider }
+type Options = { database: string; fixturePort: number; port: number; bundle?: string; backupDir?: string; logger?: boolean; operator?: Operator; privateStorage?: boolean; aiProvider?: AIProvider; researchCatalog?: ResearchCatalog }
 const tools = ['Subfinder', 'WappalyzerGo', 'MDN HTTP Observatory', 'HTTPx', 'Nuclei', 'OWASP ZAP', 'OSV-Scanner', 'Semgrep', 'Gitleaks', 'Juice Shop', 'Trivy']
 
 export function createApp(options: Options) {
@@ -59,7 +63,10 @@ export function createApp(options: Options) {
   const audits = registerAudits(app, store, options.fixturePort)
   const assets = registerPublicAssets(app, store)
   registerPipeline(app, store)
-  registerResearch(app, store, portfolio, options.aiProvider)
+  registerResearch(app, store, portfolio, options.aiProvider, options.researchCatalog)
+  registerCommercialMap(app, store)
+  registerCommercialRegister(app, store, portfolio)
+  registerHistory(app, store, portfolio)
   registerDefensiveReviews(app, store)
   registerReports(app, store, portfolio, audits, assets)
   app.get('/api/health', () => {

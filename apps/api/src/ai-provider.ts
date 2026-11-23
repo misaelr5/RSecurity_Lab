@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { mkdtemp, rmdir, unlink, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applicationTypes, normalize, regions, z } from '@reac/core'
@@ -46,6 +47,8 @@ const disabled = [
   'hooks', 'plugins', 'memories', 'goals', 'multi_agent', 'multi_agent_v2', 'skill_search',
 ] as const
 const approvedVersion = 'codex-cli 0.167.0'
+const windowsInstallation = process.platform === 'win32' && process.env.LOCALAPPDATA
+  ? join(process.env.LOCALAPPDATA, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe') : undefined
 const maximumOutputBytes = 128 * 1024
 const allowedEnvironment = new Set([
   'APPDATA', 'CODEX_HOME', 'HOMEDRIVE', 'HOMEPATH', 'HOME', 'LOCALAPPDATA',
@@ -60,7 +63,8 @@ function checkCancellation(signal?: AbortSignal) {
 function cli(args: string[], cwd: string, options: { signal?: AbortSignal; input?: string; timeoutMs: number; inspect?: (line: string) => void }) {
   checkCancellation(options.signal)
   return new Promise<{ stdout: string; stderr: string; status: number | null }>((resolve, reject) => {
-    const child = spawn('codex', args, { cwd, env: environment(), shell: false, windowsHide: true, stdio: [options.input ? 'pipe' : 'ignore', 'pipe', 'pipe'] })
+    const executable = windowsInstallation && existsSync(windowsInstallation) ? windowsInstallation : 'codex'
+    const child = spawn(executable, args, { cwd, env: environment(), shell: false, windowsHide: true, stdio: [options.input ? 'pipe' : 'ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     let nextLine = ''

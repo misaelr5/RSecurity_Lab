@@ -6,8 +6,10 @@ import type { FastifyInstance } from 'fastify'
 import type { Store } from './store.ts'
 import { problem, parse, must, attach } from './http.ts'
 import { authorizationState } from './audits.ts'
+import { rememberIdentity } from './prospect-identity.ts'
+import type { IdentityHistory } from './prospect-identity.ts'
 
-type StoredProspect = Prospect & { original?: CrmRow; origin: string; campaignId?: string; responsible?: string; confidence?: string }
+type StoredProspect = Prospect & IdentityHistory & { original?: CrmRow; origin: string; campaignId?: string; responsible?: string; confidence?: string; archivedAt?: string; archiveReason?: string }
 const portable = z.strictObject({
   version: z.literal(1),
   prospects: z.array(z.strictObject({
@@ -71,9 +73,10 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     const filters = parse(z.strictObject({
       q: z.string().max(120).optional(), region: prospect.shape.region.optional(),
       industry: z.string().max(120).optional(), applicationType: z.enum(applicationTypes).optional(), status: z.enum(statuses).optional(),
-      campaign: id.optional(), page: z.coerce.number().int().min(1).max(10000).default(1),
+      campaign: id.optional(), archived: z.enum(['exclude', 'include', 'only']).default('exclude'), page: z.coerce.number().int().min(1).max(10000).default(1),
     }), request.query)
     const filtered = store.list<StoredProspect>('organizations').filter((item) =>
+      (filters.archived === 'include' || Boolean(item.archivedAt) === (filters.archived === 'only')) &&
       (!filters.region || normalize(item.region) === normalize(filters.region)) &&
       (!filters.status || item.status === filters.status) &&
       (!filters.campaign || item.campaignId === filters.campaign) &&
@@ -152,7 +155,17 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
       }
     }
     store.log('Prospecto actualizado', org.id)
-    return store.update<StoredProspect>('organizations', org.id, { ...org, ...dto.prospect, original: org.original, origin: org.origin }, key)
+    return store.update<StoredProspect>('organizations', org.id, { ...org, ...dto.prospect, knownIdentities: rememberIdentity(org, dto.prospect), original: org.original, origin: org.origin }, key)
+  }))
+  function archive(org: ReturnType<typeof get>, reason: string) {
+    if (org.archivedAt) return org
+    const next = store.update<StoredProspect>('organizations', org.id, { ...org, archiveReason: reason, archivedAt: new Date().toISOString() })
+    store.log('Prospecto archivado', org.id)
+    return next
+  }
+  app.post<{ Params: { id: string } }>('/api/prospects/:id/archive', (request) => store.transaction(() => {
+    const { reason } = parse(z.strictObject({ reason: z.string().trim().min(1).max(250) }), request.body)
+    return archive(get(request.params.id), reason)
   }))
   app.delete<{ Params: { id: string } }>('/api/prospects/:id', (request, reply) => store.transaction(() => {
     const org = get(request.params.id)
@@ -160,8 +173,7 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     if (store.list('engagements', org.id).some((engagement) => store.list('authorizations', engagement.id).length)) {
       throw problem(409, 'La ficha tiene historial de autorizaciones y debe conservarse.')
     }
-    store.remove('organizations', org.id)
-    store.log('Prospecto eliminado', org.id)
+    archive(org, 'Archivada por el operador.')
     return reply.code(204).send()
   }))
   function importRows(rows: { row: number; result: ReturnType<typeof prospect.safeParse>; original?: CrmRow }[]) {
@@ -231,10 +243,9 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
     const { id, name, blocked, crmIndustry, approved } = handoff(item)
     return { id, name, blocked, industry: item.industry, crmIndustry, approved }
   }))
-  app.get('/api/prospects/export', (request, reply) => {
-    const { mode } = parse(z.strictObject({ mode: z.literal('handoff').optional() }), request.query)
-    const rows = store.list<StoredProspect>('organizations').map((item) => {
-      const transfer = mode === 'handoff' ? handoff(item) : undefined
+  function crmExport(transferApproved: boolean, selection?: ReadonlySet<string>) {
+    const rows = store.list<StoredProspect>('organizations').filter((item) => !selection || selection.has(item.id)).map((item) => {
+      const transfer = transferApproved ? handoff(item) : undefined
       return ({
       presencia_web: 'Sin verificar', prioridad: 'Media', servicio: 'A definir', ...Object.fromEntries(Object.entries(item.original ?? {}).map(([key, value]) => [key, unwrapCrmCell(value)])),
       empresa: item.name, rubro: transfer?.crmIndustry ?? item.industry, ciudad: item.city, web: item.website,
@@ -244,22 +255,42 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
       ...(transfer?.blocked ? { estado: 'No contactar', consentimiento: 'Excluido' } : {}),
     })
     })
-    return attach(reply, 'reac-leads-v1.csv', 'text/csv; charset=utf-8', crmCsv(rows))
+    return crmCsv(rows)
+  }
+  app.get('/api/prospects/export', (request, reply) => {
+    const { mode } = parse(z.strictObject({ mode: z.literal('handoff').optional() }), request.query)
+    return attach(reply, 'reac-leads-v1.csv', 'text/csv; charset=utf-8', crmExport(mode === 'handoff'))
   })
-  app.get<{ Params: { id: string } }>('/api/prospects/:id/score', (request) => {
-    const item = get(request.params.id)
-    const weight = z.coerce.number().int().min(0).max(100)
-    const weights = parse(z.strictObject({ site: weight.default(20), contact: weight.default(20), source: weight.default(35), application: weight.default(25) }), request.query)
+  const weight = z.coerce.number().int().min(0).max(100)
+  const weightSchema = z.strictObject({ site: weight.default(20), contact: weight.default(20), source: weight.default(35), application: weight.default(25) })
+  function commercialScore(item: ReturnType<typeof get>, weights = weightSchema.parse({})) {
+    const evidence = notesFor(item.id).find((note) => note.level === 'OBSERVACION_PUBLICA' && Boolean(note.reviewedAt))
     const signals = [
       { label: 'Tipo de aplicación publicado', weight: weights.application, factor: ['Marketplace', 'Comercio electrónico', 'Software de gestión', 'Portal de clientes'].includes(item.applicationType ?? '') ? 1 : item.applicationType === 'Reservas' ? 0.7 : 0, detail: item.applicationType ?? 'Sin clasificar' },
       { label: 'Sitio oficial registrado', weight: weights.site, factor: item.website ? 1 : 0, detail: item.website ? 'Registrado' : 'Pendiente' },
       { label: 'Canal público de contacto', weight: weights.contact, factor: item.email || item.phone || item.contact ? (item.contactPurpose === 'Derivación' ? 0.6 : 1) : 0, detail: item.contactPurpose ?? (item.email || item.phone || item.contact ? 'Canal registrado' : 'Pendiente') },
-      { label: 'Evidencia pública revisada', weight: weights.source, factor: notesFor(item.id).some((note) => note.level === 'OBSERVACION_PUBLICA' && Boolean(note.reviewedAt)) ? 1 : 0, detail: 'Fuente atribuida y revisada' },
+      { label: 'Evidencia pública revisada', weight: weights.source, factor: evidence ? 1 : 0, detail: evidence ? 'Fuente atribuida y revisada' : 'Pendiente de revisión' },
     ]
     const total = signals.reduce((sum, signal) => sum + signal.weight, 0)
     if (!total) throw problem(400, 'Asigná peso a por lo menos una señal.')
-    const score = optedOut(item) ? null : Math.round(signals.reduce((sum, signal) => sum + signal.factor * signal.weight, 0) * 100 / total)
-    return { score, signals: signals.map((signal) => ({ ...signal, present: signal.factor > 0 })) }
+    const score = optedOut(item) || item.archivedAt || item.status === 'Perdido' ? null : Math.round(signals.reduce((sum, signal) => sum + signal.factor * signal.weight, 0) * 100 / total)
+    return { score, signals: signals.map((signal) => ({ ...signal, present: signal.factor > 0 })), evidence }
+  }
+  app.get<{ Params: { id: string } }>('/api/prospects/:id/score', (request) => {
+    const item = get(request.params.id)
+    const { score, signals, evidence } = commercialScore(item, parse(weightSchema, request.query))
+    const type = item.applicationType ?? 'Sin clasificar'
+    const serviceByApplication: Record<string, string> = {
+      'Portal de clientes': 'Revisión autorizada de autenticación y autorización', 'Comercio electrónico': 'Auditoría autorizada de una aplicación web',
+      Reservas: 'Revisión autorizada del flujo de reservas', Marketplace: 'Revisión autorizada de roles y flujos del marketplace',
+      'Software de gestión': 'Revisión autorizada de permisos y gestión de datos',
+    }
+    const recommendation = score === null ? null : {
+      fact: evidence?.statement ?? '', hypothesis: evidence && serviceByApplication[type] ? 'La función publicada permite plantear una revisión acotada de ese flujo.' : 'Falta evidencia para proponer un alcance técnico específico.',
+      opportunity: evidence && serviceByApplication[type] ? serviceByApplication[type] : 'Relevar una necesidad de desarrollo web o mantenimiento',
+      sourceId: evidence?.sourceId,
+    }
+    return { score, signals, recommendation }
   })
   app.post<{ Params: { id: string } }>('/api/prospects/:id/sources', (request, reply) => store.transaction(() => {
     const org = get(request.params.id)
@@ -284,7 +315,7 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
   }))
   app.post<{ Params: { id: string } }>('/api/prospects/:id/drafts', (request) => store.transaction(() => {
     const org = get(request.params.id)
-    if (optedOut(org)) throw problem(409, 'Este prospecto está excluido de contacto.')
+    if (optedOut(org) || org.archivedAt) throw problem(409, 'La ficha está excluida o archivada.')
     const { channel } = parse(z.strictObject({ channel: z.enum(['Email', 'WhatsApp']).default('Email') }), request.body)
     return createDraft(org.id, channel)
   }))
@@ -304,19 +335,21 @@ export function registerPortfolio(app: FastifyInstance, store: Store) {
   }
   app.put<{ Params: { id: string } }>('/api/drafts/:id', (request) => store.transaction(() => {
     const draft = must(store.find<Draft>('outreach_drafts', parse(id, request.params.id)))
-    if (optedOut(get(draft.parent))) throw problem(409, 'Este prospecto está excluido de contacto.')
+    const org = get(draft.parent)
+    if (optedOut(org) || org.archivedAt) throw problem(409, 'La ficha está excluida o archivada.')
     const value = parse(message, request.body)
     store.log('Borrador editado', draft.id)
     return store.update('outreach_drafts', draft.id, { ...value, channel: draft.channel })
   }))
   app.post<{ Params: { id: string } }>('/api/drafts/:id/review', (request) => store.transaction(() => {
     const draft = must(store.find<Draft>('outreach_drafts', parse(id, request.params.id)))
-    if (optedOut(get(draft.parent))) throw problem(409, 'Este prospecto está excluido de contacto.')
+    const org = get(draft.parent)
+    if (optedOut(org) || org.archivedAt) throw problem(409, 'La ficha está excluida o archivada.')
     const { reviewer, contentVersion } = parse(versionedReview, request.body)
     if (contentVersion !== draftVersion(draft)) throw problem(409, 'El mensaje cambió. Volvé a abrirlo para revisar el borrador actual.')
     store.log('Mensaje aprobado para uso manual', draft.id)
     return store.update('outreach_drafts', draft.id, { ...draftContent(draft), reviewer, reviewedAt: new Date().toISOString() })
   }))
 
-  return { get, sourcesFor, notesFor, addDiscovery }
+  return { get, sourcesFor, notesFor, addDiscovery, crmExport, priorityScore: (organizationId: string) => commercialScore(get(organizationId)).score }
 }
