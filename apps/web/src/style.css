@@ -1,14 +1,21 @@
 :root {
   font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
   color: #edf2f8;
-  background: #11151c;
+  background: var(--page);
   color-scheme: dark;
-  --page: #11151c;
-  --side: #171c25;
-  --surface: #1d2430;
-  --line: #354152;
+  --night-black: #000;
+  --night-navy: #0a1428;
+  --night-raised: #101f3a;
+  --night-line: #2c4368;
+  --night-blue: #6396ff;
+  --night-blue-hover: #8bb2ff;
+  --night-on-blue: #041022;
+  --page: var(--night-black);
+  --side: var(--night-navy);
+  --surface: var(--night-navy);
+  --line: var(--night-line);
   --muted: #aab7c8;
-  --accent: #a9ccff;
+  --accent: var(--night-blue);
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
@@ -21,10 +28,10 @@ p + p { margin-top: .65rem; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid #b5d6ff; outline-offset: 3px; }
 button, .button {
   display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: .48rem .85rem;
-  border: 1px solid var(--line); border-radius: 7px; background: #232c3a; color: #f0f5ff; font: inherit;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--night-raised); color: #f0f5ff; font: inherit;
   font-weight: 600; cursor: pointer; text-decoration: none; text-align: center;
 }
-button:hover:not(:disabled), .button:hover { background: #2d394b; }
+button:hover:not(:disabled), .button:hover { background: #172a4d; }
 button:disabled { opacity: .55; cursor: default; }
 button.primary, .button.primary { background: var(--accent); color: #122139; border-color: var(--accent); }
 button.primary:hover:not(:disabled), .button.primary:hover { background: #c7dfff; }
@@ -44,7 +51,7 @@ code { overflow-wrap: anywhere; font-size: .9em; color: #cae0ff; }
 nav { display: grid; gap: 5px; margin-top: 44px; }
 nav a { display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 8px 11px; border: 1px solid transparent; border-radius: 8px; color: #c4d0df; text-decoration: none; }
 nav a span { width: 19px; font-size: 17px; text-align: center; }
-nav a:hover { background: #222b38; color: white; }
+nav a:hover { background: var(--night-raised); color: white; }
 nav a[aria-current] { background: #26364d; border-color: #405779; color: #e7f1ff; }
 .connection { margin-top: auto; border-top: 1px solid var(--line); padding: 15px 4px 0; color: var(--muted); font-size: 13px; }
 .connection i { display: inline-block; width: 8px; height: 8px; margin-right: 8px; background: #8cd3b1; border-radius: 50%; }
@@ -63,9 +70,9 @@ main { width: min(100%, 1270px); margin: 0 auto; padding: 44px clamp(15px, 4.3vw
 .region-list { display: grid; align-content: center; }
 .region-list div { display: grid; grid-template-columns: minmax(98px, 1fr) 1fr 2ch; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid #495d76; }
 .region-list div:last-child { border-bottom: 0; }
-meter { width: 100%; height: 12px; accent-color: #a9ccff; }
+meter { width: 100%; height: 12px; accent-color: var(--accent); }
 meter::-webkit-meter-bar { background: #3c506d; border: 0; border-radius: 4px; }
-meter::-webkit-meter-optimum-value { background: #a9ccff; border-radius: 4px; }
+meter::-webkit-meter-optimum-value { background: var(--accent); border-radius: 4px; }
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 2px; }
 .metrics a { min-width: 0; color: inherit; text-decoration: none; padding: 10px 13px; border-left: 1px solid var(--line); }
 .metrics a:hover span { text-decoration: underline; }
