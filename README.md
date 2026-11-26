@@ -138,3 +138,12 @@ reac-security-lab/
 ~~~
 
 [Bitácora](docs/ESTADO.md) · [Ciclos](docs/CICLOS_IMPLEMENTACION.md) · [Operación](docs/OPERACION.md) · [Pruebas](docs/TESTING.md) · [Roadmap](docs/ROADMAP.md)
+
+### Comprobar el estado de Git
+
+Antes de empezar o publicar cambios, revisá la rama, el remoto y los archivos pendientes:
+
+~~~powershell
+git status --short --branch
+git remote -v
+~~~
